@@ -1,0 +1,155 @@
+# Security
+
+This document describes the security posture of the Unmist backend: what is
+implemented, what is a documented limitation, and what is deliberately not
+claimed. It is written to be verifiable — every "implemented" control has code
+and, where applicable, a test.
+
+## Threat model (what we defend against)
+
+- **Credential theft** — passwords and refresh tokens must not leak from the DB.
+- **Token forgery / replay** — access tokens must be verifiable and short-lived;
+  refresh tokens must be revocable and single-use.
+- **Broken object-level authorization (BOLA/IDOR)** — a valid user must not read
+  or mutate another tenant's data by guessing IDs.
+- **SSRF** — the retrieval feature must not be usable to reach internal
+  networks, cloud metadata endpoints, or loopback services.
+- **Data fabrication** — the system must not present invented content as
+  verified knowledge or evidence.
+- **Unbounded resource use** — retrieval and sandbox execution must be bounded
+  in size and time.
+
+## Authentication
+
+Implemented in `security/passwords.py`, `security/tokens.py`,
+`services/auth.py`:
+
+- **Argon2id** password hashing (memory-hard KDF; cost parameters are
+  configurable and validated at startup).
+- **Access tokens** are short-lived HS256 JWTs with `sub`, `iat`, `nbf`, `exp`,
+  `aud`, `typ`, and `jti` claims. `typ` is checked on decode so a refresh token
+  can never be used as an access token.
+- **Refresh tokens** are opaque, high-entropy values. **Only their SHA-256
+  hash is stored**, so a DB leak does not expose usable tokens.
+- **Refresh rotation**: each use issues a new refresh token and revokes the old
+  one. Reuse of an already-rotated token is treated as theft and revokes the
+  family.
+
+### Limitations
+
+- **HS256 with a shared secret.** This is symmetric; every verifier must hold
+  the secret. For multi-service or zero-trust deployments, migrate to asymmetric
+  signing (RS256/ES256) or an internal token service. Not implemented here.
+- **No MFA, no password reset, no account lockout/rate limiting** at the app
+  layer. Deploy behind a rate-limiting proxy and add these before production
+  exposure. Not implemented here.
+- **Token revocation is refresh-only.** Access tokens are stateless and remain
+  valid until expiry (default 15 min). There is no access-token denylist.
+
+## Authorization (multi-tenant isolation)
+
+Implemented in `security/dependencies.py`, `security/rbac.py`,
+`services/orgs.py`:
+
+- Roles: **owner / admin / member**, resolved **server-side** on every
+  org-scoped route via an `OrgRole` dependency.
+- Resource access is always scoped by the caller's tenant; IDs alone never grant
+  access.
+
+### Limitations
+
+- Authorization is enforced in the service layer by convention. There is no
+  centralized query-level row-filtering middleware, so a future route that
+  forgets the dependency would be a BOLA risk. Mitigated by review + tests, not
+  by a hard framework guarantee.
+
+## SSRF defense (retrieval)
+
+Implemented in `services/knowledge/retrieval.py`, tested in
+`backend/tests/test_retrieval.py`:
+
+- **Deny by default.** An empty `RETRIEVAL_ALLOWED_HOSTS` allowlist blocks all
+  outbound retrieval.
+- **Scheme allowlist**: only `http`/`https`.
+- **Host allowlist**: exact host match against the configured set.
+- **IP validation after DNS resolution**: the resolved addresses are checked
+  with `ipaddress.is_global`; private, loopback, link-local, reserved,
+  multicast, and otherwise non-global addresses are rejected. A literal
+  non-global IP in the URL is rejected before resolution.
+- **Redirect re-validation**: every redirect hop is re-checked for scheme, host,
+  and IP, and the redirect count is bounded.
+- **robots.txt** is respected (self-contained parser; the stdlib parser is
+  unavailable in this Python build).
+- **Bounded responses**: connection/read timeouts and a streaming max-size cap
+  prevent unbounded reads.
+- **No credentials forwarded**: no cookies, auth headers, or proxies are attached
+  to outbound requests; the User-Agent is explicit, not disguised.
+
+### Limitations
+
+- **DNS rebinding is mitigated, not eliminated.** We resolve and then let
+  `httpx` resolve again for the actual connection. A fully hardened client pins
+  the resolved IP for the connection. Not implemented here.
+- **robots.txt failures fail open** (an unreachable robots.txt is treated as
+  "no rules"). This favors availability; strict deployments may want fail-closed.
+
+## Data-handling & privacy
+
+- **Audit trail** (`services/audit.py`): append-only `audit_events` with
+  **secret redaction** before persistence.
+- **Secrets** are read from environment variables; `.env` is git-ignored and
+  `.env.example` carries no real values.
+- **Production startup checks** (`config.py`): a placeholder or short
+  `SECRET_KEY` in production **aborts startup** instead of running insecurely.
+- **No fabricated data**: extraction and diagnosis return `insufficient_evidence`
+  rather than guessing; model-generated content is kept separate from verified
+  graph content and labeled.
+
+### Limitations
+
+- **No encryption at rest or field-level encryption** beyond what the database
+  provides. TLS in transit is expected to be terminated at the proxy/load
+  balancer. Not implemented in-app.
+- **No PII export/erasure (GDPR) endpoints.** Not implemented.
+
+## Code sandbox
+
+Implemented in `services/learning/sandbox.py`:
+
+- Submissions run in a **separate subprocess** with a stripped environment,
+  a wall-clock timeout, and a static deny-list of dangerous imports
+  (`os`, `subprocess`, `socket`, `ctypes`, etc.).
+
+### Limitations — read before trusting this
+
+- **This is a baseline, not a hardened multi-tenant isolation boundary.** It is
+  a subprocess with an import deny-list, **not** a container, gVisor, Firecracker,
+  or seccomp jail. Determined code can escape an import deny-list (e.g. via
+  `__import__`, `importlib`, or built-in object traversal).
+- **Do not run untrusted third-party code in production on this sandbox.** For
+  that, integrate a real isolation boundary. Not implemented here.
+
+## Dependency & supply-chain posture
+
+- Dependencies are **pinned** in `requirements.txt`.
+- No lockfile/hash-pinning or automated dependency scanning is configured. Not
+  implemented here.
+
+## Known gaps (explicitly not implemented)
+
+| Gap | Risk | Recommendation |
+| --- | --- | --- |
+| No rate limiting / lockout | Brute force, credential stuffing | Add at proxy + app layer |
+| No MFA | Account takeover | Add TOTP/WebAuthn |
+| No access-token denylist | Stolen access token valid until expiry | Keep TTL short; add denylist if needed |
+| HS256 shared secret | Secret sprawl | Migrate to RS256/ES256 |
+| Sandbox not hardened | Code escape | Use container/VM isolation for untrusted code |
+| DNS rebinding not fully pinned | SSRF via rebind | Pin resolved IP per connection |
+| No encryption at rest | Data exposure on disk leak | Rely on disk/volume encryption |
+| No GDPR export/erasure | Compliance | Add subject-access/erasure endpoints |
+| No CI security scanning | Regressions ship unnoticed | Add SAST + dependency scanning |
+
+## Reporting
+
+This is a pre-release foundation. If you find a vulnerability, please open a
+private security advisory rather than a public issue.

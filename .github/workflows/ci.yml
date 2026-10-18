@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10"]
+
+    env:
+      # Test-time configuration (SQLite; no external services required).
+      SECRET_KEY: ci-test-secret-key-not-for-production-use-0123456789
+      DATABASE_URL: sqlite:///./data/ci.db
+      ENVIRONMENT: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest==8.4.2 flake8==7.3.0 isort==7.0.0 mypy==1.18.2
+
+      - name: Lint (flake8)
+        run: python -m flake8 backend scripts
+
+      - name: Import order (isort)
+        run: python -m isort --profile black --line-length 100 --check-only backend/app backend/tests scripts
+
+      - name: Type check (mypy)
+        env:
+          PYTHONPATH: backend
+        run: python -m mypy backend/app --ignore-missing-imports
+
+      - name: Apply migrations
+        env:
+          PYTHONPATH: backend
+        run: python -m alembic upgrade head
+
+      - name: Verify migration matches models
+        env:
+          PYTHONPATH: backend
+        run: python scripts/verify_migration.py data/ci.db
+
+      - name: Run tests
+        env:
+          PYTHONPATH: backend
+        run: python -m pytest backend/tests -q
