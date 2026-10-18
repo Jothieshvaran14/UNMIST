@@ -5,9 +5,19 @@ Importing this package registers every model on the shared declarative
 schema.
 """
 
-from . import audit, job, knowledge, learning, org, portfolio, retention, user
+from . import audit, documents, job, knowledge, learning, org, portfolio, retention, user
 from .audit import AuditEvent
 from .base import GUID, Base, IdMixin, TimestampMixin
+from .documents import (
+    DocumentErrorCategory,
+    DocumentPage,
+    DocumentProcessingState,
+    OcrRegion,
+    OcrReview,
+    PageStatus,
+    RegionType,
+    ReviewStatus,
+)
 from .job import Job, JobStatus
 from .knowledge import (
     Claim,
@@ -84,7 +94,16 @@ __all__ = [
     "PortfolioItem",
     "Job",
     "JobStatus",
+    "DocumentProcessingState",
+    "DocumentErrorCategory",
+    "DocumentPage",
+    "PageStatus",
+    "OcrRegion",
+    "OcrReview",
+    "RegionType",
+    "ReviewStatus",
     "audit",
+    "documents",
     "job",
     "knowledge",
     "learning",

@@ -112,6 +112,17 @@ class Source(IdMixin, TimestampMixin, Base):
 
 
 class SourceDocument(IdMixin, TimestampMixin, Base):
+    """A stored document (fetched from a source, or uploaded by a user).
+
+    Uploaded documents additionally carry an owner, a tenant, and a processing
+    state that drives the OCR pipeline. Fetched documents keep ``NULL`` in the
+    processing columns: they are managed by ``status`` and the ingestion path,
+    so they are never mislabelled as awaiting OCR.
+
+    Coordinate/geometry data for recognized content lives in ``DocumentPage``
+    and ``OcrRegion``; this row only tracks the original artifact.
+    """
+
     __tablename__ = "source_documents"
 
     source_id: Mapped[str] = mapped_column(
@@ -120,6 +131,33 @@ class SourceDocument(IdMixin, TimestampMixin, Base):
     topic_id: Mapped[Optional[str]] = mapped_column(
         GUID, ForeignKey("topics.id", ondelete="CASCADE"), index=True, nullable=True
     )
+    # --- ownership / tenancy (uploads) ------------------------------------
+    owner_user_id: Mapped[Optional[str]] = mapped_column(
+        GUID, ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    org_id: Mapped[Optional[str]] = mapped_column(
+        GUID, ForeignKey("organizations.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    # Untrusted display metadata only; never used to build storage paths.
+    original_filename: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    # --- document-processing lifecycle (uploads) --------------------------
+    # NULL means "not part of the OCR pipeline" (fetched documents).
+    processing_state: Mapped[Optional[str]] = mapped_column(
+        String(30), index=True, nullable=True
+    )
+    processing_version: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True
+    )
+    # Bounded, safe error category + description; never internal exception text.
+    error_category: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    error_detail: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    page_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_job_id: Mapped[Optional[str]] = mapped_column(
+        GUID, ForeignKey("jobs.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    # --- original content -------------------------------------------------
     title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     url: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
     media_type: Mapped[str] = mapped_column(String(120), nullable=False)

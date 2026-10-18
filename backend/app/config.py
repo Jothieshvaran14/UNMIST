@@ -73,6 +73,15 @@ def _host_set(raw: Optional[str]) -> frozenset[str]:
     return frozenset(hosts)
 
 
+def _env_set(name: str, default: str) -> frozenset[str]:
+    """Parse a comma-separated list of lowercase tokens (e.g. allowed formats)."""
+    raw = _env(name) or default
+    tokens = {token.strip().lower() for token in raw.split(",") if token.strip()}
+    if not tokens:
+        raise ConfigurationError(f"{name} must contain at least one value")
+    return frozenset(tokens)
+
+
 @dataclass(frozen=True)
 class Settings:
     environment: str
@@ -98,6 +107,13 @@ class Settings:
     storage_bucket: Optional[str]
     job_max_attempts: int
     job_poll_interval_seconds: float
+    # --- Document ingestion (uploads) -------------------------------------
+    upload_max_bytes: int
+    upload_max_pages: int
+    upload_max_image_pixels: int
+    upload_max_image_dimension: int
+    upload_allowed_formats: frozenset[str]
+    upload_max_per_user: int
 
     @property
     def is_production(self) -> bool:
@@ -163,6 +179,14 @@ def load_settings() -> Settings:
         job_poll_interval_seconds=float(
             _env("JOB_POLL_INTERVAL_SECONDS") or "1.0"
         ),
+        upload_max_bytes=_env_int("UPLOAD_MAX_BYTES", 20 * 1024 * 1024, 1024),
+        upload_max_pages=_env_int("UPLOAD_MAX_PAGES", 200, 1, 10000),
+        upload_max_image_pixels=_env_int("UPLOAD_MAX_IMAGE_PIXELS", 40_000_000, 1024),
+        upload_max_image_dimension=_env_int("UPLOAD_MAX_IMAGE_DIMENSION", 12000, 16),
+        upload_allowed_formats=_env_set(
+            "UPLOAD_ALLOWED_FORMATS", "pdf,jpg,jpeg,png,tiff"
+        ),
+        upload_max_per_user=_env_int("UPLOAD_MAX_PER_USER", 1000, 1),
     )
 
 

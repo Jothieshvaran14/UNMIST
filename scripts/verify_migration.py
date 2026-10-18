@@ -17,6 +17,7 @@ if str(BACKEND) not in sys.path:
 from app.db import Base  # noqa: E402
 from app.models import (  # noqa: E402,F401
     audit,
+    documents,
     job,
     knowledge,
     learning,

@@ -19,6 +19,8 @@ python-multipart==0.0.20
 tenacity==8.5.0
 python-dateutil==2.9.0
 pytz==2025.2
+# Pillow is used for image *validation* (dimensions, integrity) at upload time.
+Pillow==10.4.0
 
 # Development / testing dependencies
 pytest==8.4.2

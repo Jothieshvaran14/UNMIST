@@ -27,6 +27,7 @@ from app.config import get_settings  # noqa: E402
 # Import every model module so that all tables are registered on Base.metadata.
 from app.models import (  # noqa: E402,F401
     audit,
+    documents,
     job,
     knowledge,
     learning,

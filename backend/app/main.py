@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import __version__
-from .api.v1 import auth, knowledge, learning, orgs, profiles
+from .api.v1 import auth, documents, knowledge, learning, orgs, profiles
 from .config import get_settings
 from .errors import register_error_handlers
 from .logging import configure_logging, get_logger, set_correlation_id
@@ -104,6 +104,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge.router, prefix="/api/v1")
     app.include_router(learning.router, prefix="/api/v1")
     app.include_router(profiles.router, prefix="/api/v1")
+    app.include_router(documents.router, prefix="/api/v1")
 
     @app.get("/api/v1/health", response_model=HealthResponse, tags=["system"])
     def health() -> HealthResponse:

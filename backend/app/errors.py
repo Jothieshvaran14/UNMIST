@@ -54,6 +54,11 @@ class ValidationError(AppError):
     code = "validation_error"
 
 
+class PayloadTooLargeError(AppError):
+    status_code = 413
+    code = "payload_too_large"
+
+
 class RateLimitError(AppError):
     status_code = 429
     code = "rate_limited"
