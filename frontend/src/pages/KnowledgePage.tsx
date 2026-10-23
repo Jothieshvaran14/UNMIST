@@ -19,6 +19,7 @@ import {
   ChevronRight,
   FileStack,
   Info,
+  Plus,
   RefreshCw,
   Share2,
 } from "lucide-react";
@@ -30,7 +31,10 @@ import {
   Card,
   EmptyState,
   ErrorState,
+  Field,
   LoadingRow,
+  Modal,
+  toUserMessage,
 } from "@/components/ui";
 import * as api from "@/services/api";
 import type { GraphVersion, Topic } from "@/types/api";
@@ -39,11 +43,45 @@ export function KnowledgePage() {
   const topics = useAsyncData((signal) => api.listTopics({ limit: 50 }, signal), []);
   const [selected, setSelected] = useState<Topic | null>(null);
 
+  // Topic creation (real POST /v1/topics).
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [fieldError, setFieldError] = useState<string | null>(null);
+
   const graphs = useAsyncData(
     (signal) => api.listGraphVersions(selected?.id ?? "", signal),
     [selected?.id],
     { enabled: selected !== null },
   );
+
+  async function submitTopic() {
+    const name = newName.trim();
+    if (!name) {
+      setFieldError("A topic name is required.");
+      return;
+    }
+    setCreateBusy(true);
+    setCreateError(null);
+    setFieldError(null);
+    try {
+      const topic = await api.createTopic({
+        name,
+        ...(newDesc.trim() ? { description: newDesc.trim() } : {}),
+      });
+      setSelected(topic);
+      setCreating(false);
+      setNewName("");
+      setNewDesc("");
+      topics.reload();
+    } catch (err) {
+      setCreateError(toUserMessage(err));
+    } finally {
+      setCreateBusy(false);
+    }
+  }
 
   return (
     <>
@@ -64,6 +102,17 @@ export function KnowledgePage() {
             disabled={topics.refreshing}
           >
             Refresh
+          </Button>
+          <Button
+            variant="primary"
+            icon={<Plus />}
+            onClick={() => {
+              setCreateError(null);
+              setFieldError(null);
+              setCreating(true);
+            }}
+          >
+            New topic
           </Button>
           <Link to="/documents">
             <Button variant="secondary" icon={<FileStack />}>
@@ -223,6 +272,63 @@ export function KnowledgePage() {
           </div>
         </div>
       )}
+
+      <Modal
+        open={creating}
+        onClose={() => setCreating(false)}
+        title="New topic"
+        description="Topics are created server-side and appear in your knowledge library once the API accepts them."
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setCreating(false)} disabled={createBusy}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={submitTopic}
+              loading={createBusy}
+              disabled={!newName.trim()}
+            >
+              Create topic
+            </Button>
+          </>
+        }
+      >
+        <div className="stack gap-4">
+          {createError && (
+            <Alert tone="danger" title="Could not create topic">
+              {createError}
+            </Alert>
+          )}
+          <Field label="Name" htmlFor="topic-name" required error={fieldError}>
+            <input
+              id="topic-name"
+              className="input"
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+              placeholder="e.g. Classical mechanics"
+              maxLength={200}
+              aria-invalid={fieldError ? "true" : undefined}
+              disabled={createBusy}
+            />
+          </Field>
+          <Field
+            label="Description"
+            htmlFor="topic-desc"
+            hint="Optional. Shown on the topic detail card."
+          >
+            <textarea
+              id="topic-desc"
+              className="textarea"
+              style={{ minHeight: 90 }}
+              value={newDesc}
+              onChange={(event) => setNewDesc(event.target.value)}
+              maxLength={2000}
+              disabled={createBusy}
+            />
+          </Field>
+        </div>
+      </Modal>
     </>
   );
 }

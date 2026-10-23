@@ -82,8 +82,7 @@ are code-split.
 `GET /v1/documents/{id}/regions`, `POST /v1/documents/{id}/segment`,
 `GET /v1/documents/{id}/segmentation`, `GET /v1/documents/{id}/segments`,
 `POST /v1/documents/{id}/segments/{sid}/review`, `GET /v1/topics`, `POST /v1/topics`,
-`GET /v1/topics/{id}`, `GET /v1/topics/{id}/graphs`, `GET /v1/learners/me/mastery`,
-`GET /v1/learners/me/reviews/due`, `GET /v1/me/profile`.
+`GET /v1/topics/{id}/graphs`, `GET /v1/learners/me/reviews/due`, `GET /v1/me/profile`.
 
 ## Known gaps
 

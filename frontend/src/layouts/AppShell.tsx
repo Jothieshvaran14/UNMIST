@@ -21,7 +21,10 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "@/auth/AuthContext";
+import { useAsyncData, usePolling } from "@/hooks/useAsyncData";
 import { Button } from "@/components/ui";
+import * as api from "@/services/api";
+import { ApiClientError } from "@/services/http";
 
 interface NavEntry {
   to: string;
@@ -195,7 +198,8 @@ export function AppShell() {
           </div>
 
           <div className="topbar__right">
-            <span className="conn-dot conn-dot--ok" title="Session active">
+            <ConnectionIndicator />
+            <span className="conn-dot" title="Signed in as">
               <span className="conn-dot__dot" aria-hidden="true" />
               {user?.email ?? "Signed in"}
             </span>
@@ -207,5 +211,57 @@ export function AppShell() {
         </main>
       </div>
     </div>
+  );
+}
+
+/**
+ * Live API connection indicator.
+ *
+ * This actually calls `GET /v1/health` on mount and then every 30 seconds, so
+ * the dot reflects a real round trip rather than a hardcoded colour. A failure
+ * keeps the last known good state off and offers a manual re-check — it never
+ * claims connectivity it has not verified.
+ */
+function ConnectionIndicator() {
+  const health = useAsyncData((signal) => api.getHealth(signal), []);
+
+  // Re-check every 30s. `usePolling` aborts on unmount and never overlaps.
+  usePolling(async () => {
+    health.reload();
+    return undefined;
+  }, 30000, true);
+
+  if (health.initialLoading) {
+    return (
+      <span className="conn-dot" role="status" aria-live="polite">
+        <span className="conn-dot__dot" aria-hidden="true" />
+        Checking API…
+      </span>
+    );
+  }
+
+  if (health.error || !health.data) {
+    const offline = health.error instanceof ApiClientError && health.error.status === 0;
+    return (
+      <span className="conn-dot conn-dot--bad" role="status" aria-live="polite">
+        <span className="conn-dot__dot" aria-hidden="true" />
+        {offline ? "API unreachable" : "API error"}
+        <button
+          className="btn btn--ghost btn--sm"
+          style={{ height: 18, padding: "0 6px", fontSize: 10.5 }}
+          onClick={health.reload}
+          disabled={health.refreshing}
+        >
+          Retry
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <span className="conn-dot conn-dot--ok" role="status" aria-live="polite" title={`API v${health.data.version} · ${health.data.environment}`}>
+      <span className="conn-dot__dot" aria-hidden="true" />
+      API connected
+    </span>
   );
 }

@@ -266,6 +266,13 @@ export function DocumentDetailPage() {
     { enabled: (segStatus.data?.total_segments ?? 0) > 0 },
   );
 
+  // Line-level OCR output. Always requested for an existing document: an empty
+  // result is the honest answer before recognition has run.
+  const regions = useAsyncData(
+    (signal) => api.listRegions(documentId, { limit: 60 }, signal),
+    [documentId],
+  );
+
   const canSegment = Boolean(segStatus.data?.segment_available);
 
   async function startSegmentation() {
@@ -312,6 +319,11 @@ export function DocumentDetailPage() {
   const failed = document.processing_state === "failed";
   const segFailed = segState === "failed";
   const seg = segStatus.data;
+  // Recognition has produced (or attempted) regions in these states only.
+  const ocrHasRun =
+    document.processing_state === "completed" ||
+    document.processing_state === "review_required" ||
+    document.processing_state === "ocr_processing";
 
   return (
     <>
@@ -568,21 +580,73 @@ export function DocumentDetailPage() {
             )}
           </Card>
 
-          <Card title="Region evidence" icon={<ScanText />}>
-            <p className="text-sm text-secondary">
-              Line-level recognition results are available in the segment workspace, where each
-              segment lists the exact regions it was assembled from, with page numbers and
-              page-local coordinates.
-            </p>
-            <div className="mt-3">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => navigate(`/documents/${document.id}/segments`)}
-              >
-                Open segment workspace
-              </Button>
-            </div>
+          <Card
+            title={`Recognized regions${regions.data ? ` (${regions.data.total})` : ""}`}
+            icon={<ScanText />}
+            action={
+              (seg?.total_segments ?? 0) > 0 ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => navigate(`/documents/${document.id}/segments`)}
+                >
+                  Open segment workspace
+                </Button>
+              ) : undefined
+            }
+          >
+            {regions.initialLoading ? (
+              <LoadingRow label="Loading regions…" />
+            ) : regions.error ? (
+              <ErrorState error={regions.error} onRetry={regions.reload} compact />
+            ) : (regions.data?.items.length ?? 0) === 0 ? (
+              <EmptyState
+                icon={<ScanText />}
+                title="No recognized regions yet"
+                description={
+                  ocrHasRun
+                    ? "The server returned an empty region list for this document."
+                    : "Line-level regions appear here once text recognition runs. Nothing is rendered before then."
+                }
+              />
+            ) : (
+              <div className="stack gap-3">
+                <ul className="stack gap-2">
+                  {(regions.data?.items ?? []).slice(0, 12).map((region) => (
+                    <li className="region-ref" key={region.id}>
+                      <span className="region-ref__page">
+                        {region.reading_order !== null ? `#${region.reading_order}` : region.region_type}
+                      </span>
+                      <span className="grow" style={{ minWidth: 0 }}>
+                        <span className="region-ref__text">
+                          {region.text || region.raw_text || "(no text on this line)"}
+                        </span>
+                        <span className="region-ref__geom">
+                          {region.bbox_left},{region.bbox_top} {region.bbox_width}×{region.bbox_height} ·{" "}
+                          {region.provider}/{region.model_id}
+                          {region.model_version ? `@${region.model_version}` : ""} ·{" "}
+                          {region.processing_version}
+                          {region.confidence !== null && region.confidence !== undefined
+                            ? ` · confidence ${region.confidence} (server-provided)`
+                            : ""}
+                        </span>
+                      </span>
+                      <Badge tone={region.review_status === "confirmed" ? "success" : "neutral"}>
+                        {region.review_status}
+                      </Badge>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-muted">
+                  {regions.data && regions.data.items.length < regions.data.total
+                    ? `Showing ${regions.data.items.length} of ${regions.data.total} regions. `
+                    : ""}
+                  Coordinates are page-local pixels referenced by{" "}
+                  <code>{(regions.data?.items[0]?.page_id ?? "").slice(0, 8) || "page"}</code>.
+                  Confidence is shown only when the server supplies one.
+                </p>
+              </div>
+            )}
           </Card>
         </div>
       </div>

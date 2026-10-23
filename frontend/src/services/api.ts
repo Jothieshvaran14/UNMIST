@@ -15,7 +15,6 @@ import type {
   HealthResponse,
   LearnerProfile,
   LoginRequest,
-  Mastery,
   OcrRegion,
   Page,
   RegisterRequest,
@@ -204,10 +203,6 @@ export function createTopic(
   return request<Topic>(`${V1}/topics`, { method: "POST", body: payload, signal });
 }
 
-export function getTopic(topicId: string, signal?: AbortSignal): Promise<Topic> {
-  return request<Topic>(`${V1}/topics/${encodeURIComponent(topicId)}`, { signal });
-}
-
 export function listGraphVersions(topicId: string, signal?: AbortSignal): Promise<GraphVersion[]> {
   return request<GraphVersion[]>(
     `${V1}/topics/${encodeURIComponent(topicId)}/graphs`,
@@ -216,11 +211,6 @@ export function listGraphVersions(topicId: string, signal?: AbortSignal): Promis
 }
 
 /* -------------------------- learning ----------------------------- */
-
-/** `GET /v1/learners/me/mastery` -> list[MasteryResponse] */
-export function listMastery(signal?: AbortSignal): Promise<Mastery[]> {
-  return request<Mastery[]>(`${V1}/learners/me/mastery`, { signal });
-}
 
 /** `GET /v1/learners/me/reviews/due` -> list[ReviewResponse] */
 export function listDueReviews(signal?: AbortSignal): Promise<ReviewItem[]> {
