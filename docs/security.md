@@ -56,12 +56,66 @@ Implemented in `security/dependencies.py`, `security/rbac.py`,
 - Resource access is always scoped by the caller's tenant; IDs alone never grant
   access.
 
+### Document endpoints (processing, OCR regions, segmentation)
+
+`api/v1/documents.py` applies the same rule to every document-scoped route,
+including the Checkpoint E segmentation endpoints
+(`POST /documents/{id}/segment`, `GET .../segmentation`,
+`GET .../segments`, `POST .../segments/{sid}/review`):
+
+- **Ownership is checked server-side on every request**, including the segment
+  review mutation. The document is resolved against the caller's
+  `owner_user_id` first, and the segment is then matched to that document —
+  so a segment id alone never grants access.
+- **Cross-tenant access returns `404`, not `403`.** A `403` would confirm that
+  a guessed id exists; `404` gives no existence signal. Verified in
+  `test_documents_segmentation.py` S22 and `test_documents_ocr_pipeline.py`.
+- **Review mutations are audited** (`document.segment_review`) with the actor,
+  resource id, review action, resulting revision, and the segment's
+  type/uncertainty, through the same redacting `services/audit.py` used
+  everywhere else.
+- **Review is append-only.** Corrections write a new `segment_reviews` row and
+  bump `revision`; the segment row records the current value and reviewer.
+  Segmentation runs can never delete or overwrite a reviewed segment, so a
+  reprocess cannot launder away a human correction.
+- **Responses carry no storage keys, filesystem paths, or stack traces.**
+  Failures surface a bounded category plus a short, sanitized detail string.
+
 ### Limitations
 
 - Authorization is enforced in the service layer by convention. There is no
   centralized query-level row-filtering middleware, so a future route that
   forgets the dependency would be a BOLA risk. Mitigated by review + tests, not
   by a hard framework guarantee.
+
+### Cross-tenant defects found and fixed (Checkpoint F)
+
+The Checkpoint F integration audit reviewed the *non-document* read surfaces
+against the same standard. Two broke it. Both were reproduced against the live
+app before the fix and re-verified as closed afterwards, and both are now
+guarded by `backend/tests/test_cross_tenant_authorization.py`.
+
+**1. `GET /api/v1/topics` leaked every user's personal topics.**
+`graph_service.list_topics` filtered only on `org_id IS NULL`, while
+`create_topic` hardcodes `org_id=None` — so that predicate matched every
+personal topic in the database regardless of owner. *Before:* a second user's
+listing returned the first user's private topic. *After:* listing goes through
+the same `authorize_topic_access` rule as single-topic reads — personal topics
+to their creator, org topics to members — and the pagination total is scoped
+with them.
+
+**2. Question/assessment routes had no object-level authorization.**
+`GET /api/v1/questions/{id}` was a bare `session.get`, returning another
+tenant's question **including `reference_answer`, the grading key**. The same
+hole existed on `GET`/`POST /questions/{id}/rubrics` and `POST /assessments`.
+*After:* every question route resolves through its topic via a single shared
+`graph_service.authorize_topic_access`, and `POST /questions` additionally
+refuses to attach a question to a topic the caller cannot write to.
+
+This is the concrete form of the BOLA risk described under Limitations above:
+the rule existed and was applied on documents and single-topic reads, but had
+simply not been applied to these routes. The fix moves the decision into the
+service layer so the knowledge and learning routes cannot drift apart again.
 
 ## SSRF defense (retrieval)
 
@@ -104,6 +158,29 @@ Implemented in `services/knowledge/retrieval.py`, tested in
 - **No fabricated data**: extraction and diagnosis return `insufficient_evidence`
   rather than guessing; model-generated content is kept separate from verified
   graph content and labeled.
+- **Private document storage** (`services/storage.py`): uploaded originals and
+  derived page artifacts are stored under app-generated opaque keys — never the
+  user's filename — in a private local root. The store has no public URLs, no
+  listing, and is only reachable through an authorized API path. Originals are
+  immutable (`put` refuses overwrite) and reads verify the content hash.
+- **Untrusted uploads**: format is decided by magic bytes and confirmed by a
+  real parser, never by the client's MIME type or filename; the extension must
+  agree or the upload is rejected. Oversized bodies are rejected while
+  streaming. PDFs are rasterized by a licensed backend that does not execute
+  embedded content or fetch external resources.
+- **Processing state is bounded**: failures persist only a coarse error
+  category plus a sanitized detail — never raw exception text, file contents,
+  storage keys, or stack traces — and the processing-status API exposes only
+  lifecycle facts.
+- **OCR results are traceable and owner-scoped** (`ocr_pipeline.py`,
+  `api/v1/documents.py`): recognized regions carry model provenance (provider,
+  model id, processing version) and are served only through an owner-authorized
+  endpoint that never returns storage keys or paths. TrOCR reports no calibrated
+  confidence, so regions store `NULL` rather than a token score mislabelled as
+  correctness. Line crops are processed in-process; no page image or crop is
+  sent to a third-party API, and the model runs locally. Recognition output is
+  stored as *unverified* machine text, separate from any human-confirmed
+  correction (a reviewed region is never overwritten by a re-run).
 
 ### Limitations
 
@@ -111,6 +188,15 @@ Implemented in `services/knowledge/retrieval.py`, tested in
   provides. TLS in transit is expected to be terminated at the proxy/load
   balancer. Not implemented in-app.
 - **No PII export/erasure (GDPR) endpoints.** Not implemented.
+- **No document deletion or retention enforcement at all.** Confirmed by the
+  Checkpoint F audit: there is no `DELETE` route, no service function and no job
+  handler that ever reaches `deletion_pending`/`deleted`, and
+  `ObjectStore.delete()` has no production caller. `Org.data_retention_days` is
+  a stored column nothing reads. The skip-guards that would stop a stale worker
+  resurrecting a deleting document are implemented and tested, but they are
+  unreachable — the entry point that would set those states does not exist.
+  Private storage therefore has no erasure story, and originals are written but
+  never removed.
 
 ## Code sandbox
 

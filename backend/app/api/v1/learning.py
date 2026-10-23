@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from ...db import get_db
 from ...errors import AuthorizationError, NotFoundError
-from ...models.knowledge import LearningObjective
+from ...models.knowledge import LearningObjective, Topic
 from ...models.learning import (
     AssessmentAttempt,
     CriterionResult,
@@ -42,6 +44,39 @@ from ...services.retention import scheduling as retention_service
 router = APIRouter(tags=["learning"])
 
 
+def _load_authorized_question(
+    session: Session, question_id: str, user: User
+) -> Question:
+    """Load a question only if ``user`` may access its topic.
+
+    Questions inherit their visibility from the topic they belong to, so the
+    authorization decision is delegated to the same canonical rule the topic
+    routes use (:func:`graph_service.authorize_topic_access`). Without this
+    hop every read below was a bare ``session.get``, letting any authenticated
+    caller fetch another tenant's question **including its
+    ``reference_answer``** — the grading key.
+    """
+    question = session.get(Question, question_id)
+    if question is None:
+        raise NotFoundError("Question not found")
+    topic = graph_service.get_topic(session, question.topic_id)
+    graph_service.authorize_topic_access(session, topic=topic, user=user)
+    return question
+
+
+def _authorize_rubric_org(*, topic: Topic, payload_org_id: Optional[str]) -> None:
+    """Reject a rubric aimed at another organization's question.
+
+    ``authorize_author`` only proves the caller holds an authoring role in
+    *their own* organization; it says nothing about the question's topic. If
+    the topic is organization-owned it must be the same organization the
+    caller claims, otherwise a faculty member in org A could grade org B's
+    assessments.
+    """
+    if topic.org_id is not None and topic.org_id != payload_org_id:
+        raise AuthorizationError("Question topic belongs to a different organization")
+
+
 # ---------------------------------------------------------------------------
 # Authoring
 # ---------------------------------------------------------------------------
@@ -53,8 +88,10 @@ def create_question(
 ):
     progress_service.authorize_author(session, user=actor, org_id=payload.org_id)
     topic = graph_service.get_topic(session, payload.topic_id)
-    if topic.org_id is not None and topic.org_id != payload.org_id:
-        raise AuthorizationError("Question topic belongs to a different organization")
+    # The caller must actually be allowed to write into this topic — otherwise
+    # an author could attach questions to another tenant's personal topic.
+    graph_service.authorize_topic_access(session, topic=topic, user=actor)
+    _authorize_rubric_org(topic=topic, payload_org_id=payload.org_id)
 
     if payload.objective_id:
         objective = session.get(LearningObjective, payload.objective_id)
@@ -96,9 +133,7 @@ def get_question(
     actor: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ):
-    question = session.get(Question, question_id)
-    if question is None:
-        raise NotFoundError("Question not found")
+    question = _load_authorized_question(session, question_id, actor)
     return question
 
 
@@ -110,7 +145,9 @@ def create_rubric(
     session: Session = Depends(get_db),
 ):
     progress_service.authorize_author(session, user=actor, org_id=payload.org_id)
-    question = grading_service.get_question(session, question_id)
+    question = _load_authorized_question(session, question_id, actor)
+    topic = graph_service.get_topic(session, question.topic_id)
+    _authorize_rubric_org(topic=topic, payload_org_id=payload.org_id)
     version = 1 + session.query(Rubric).where(Rubric.question_id == question.id).count()
     rubric = Rubric(
         question_id=question.id,
@@ -139,9 +176,10 @@ def list_rubrics(
     actor: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ):
+    question = _load_authorized_question(session, question_id, actor)
     return list(
         session.query(Rubric)
-        .where(Rubric.question_id == question_id)
+        .where(Rubric.question_id == question.id)
         .order_by(Rubric.version.desc())
         .all()
     )
@@ -156,7 +194,7 @@ def create_attempt(
     actor: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ):
-    grading_service.get_question(session, payload.question_id)
+    _load_authorized_question(session, payload.question_id, actor)
     attempt = grading_service.create_attempt(
         session,
         question_id=payload.question_id,

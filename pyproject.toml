@@ -43,6 +43,37 @@ dev = [
     "mypy==1.18.2",
     "Faker==37.11.0",
 ]
+# PDF rasterization is opt-in so the base install and CI stay lean. pypdfium2 is
+# BSD-3-Clause/Apache-2.0 (permissive, commercially usable) and renders PDFs to
+# page images on CPU with no GPU or external binary. Without this extra, PDFs
+# requiring rasterization fail with a clear, permanent `pdf_renderer_unavailable`
+# error rather than producing a wrong result. Images need only Pillow (base).
+pdf = [
+    "pypdfium2==5.14.0",
+]
+# Handwriting OCR (Checkpoint D) is opt-in so the base install and CI stay
+# lean: torch + transformers are hundreds of megabytes and are only needed when
+# OCR_PROVIDER=trocr. Both are CPU-capable; no GPU is required. The default
+# OCR_PROVIDER=none works with the base install and fails OCR explicitly.
+#
+# License note: torch (BSD-3-Clause), transformers (Apache-2.0), and the
+# microsoft/trocr-base-handwritten weights (MIT, per the official model card)
+# are permissive. TrOCR was fine-tuned on the IAM handwriting database, whose
+# terms were NOT re-verified in this checkpoint (host unreachable) — confirm
+# training-data terms before any commercial deployment decision.
+#
+# Versions are pinned to those verified in the target environment (Python
+# 3.10, CPU-only torch 2.3.1, transformers 4.57.3).
+ocr = [
+    "torch==2.3.1+cpu",
+    # transformers pulls torchvision for vision encoders (TrOCR included). It
+    # MUST match the pinned torch: torchvision 0.18.1 is the release built
+    # against torch 2.3.1. A mismatched torchvision (e.g. 0.24.x, built for a
+    # newer torch) breaks transformers' lazy loader with a misleading
+    # "cannot import name" error, so it is pinned here.
+    "torchvision==0.18.1+cpu",
+    "transformers==4.57.3",
+]
 
 [tool.setuptools]
 package-dir = { "" = "backend" }

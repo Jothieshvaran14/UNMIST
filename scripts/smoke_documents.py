@@ -35,6 +35,20 @@ def main() -> int:
     env["SECRET_KEY"] = "smoke-secret-key-that-is-long-enough-0123456789abcdef"
     env["ENVIRONMENT"] = "test"
 
+    # The app does not create tables at startup; apply migrations to the fresh
+    # temp DB so the smoke test is self-contained.
+    migrate = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=str(REPO),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if migrate.returncode != 0:
+        print("FAIL: migration did not apply:", migrate.stderr[-2000:])
+        return 1
+
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -89,26 +103,63 @@ def main() -> int:
         assert resp.status_code == 201, resp.text
         body = resp.json()
         print("upload OK:", body["id"], body["processing_state"], body["media_type"])
-        assert body["processing_state"] == "uploaded"
+        # Uploading enqueues a job, so the document is already `queued`.
+        assert body["processing_state"] == "queued"
         assert body["page_count"] == 1
         assert "storage_key" not in body
+        doc_id = body["id"]
 
         # Fetch it back.
-        got = client.get(f"/api/v1/documents/{body['id']}", headers=headers)
+        got = client.get(f"/api/v1/documents/{doc_id}", headers=headers)
         assert got.status_code == 200, got.text
         assert got.json()["id"] == body["id"]
         print("fetch OK")
 
         # Unauthorized fetch.
-        anon = client.get(f"/api/v1/documents/{body['id']}")
+        anon = client.get(f"/api/v1/documents/{doc_id}")
         assert anon.status_code == 401, anon.text
         print("unauthenticated rejected OK")
 
-        # Storage file exists privately.
+        # Original stored privately (one file so far).
         storage = Path(env["STORAGE_LOCAL_DIR"])
-        files = [p for p in storage.rglob("*") if p.is_file()]
-        assert len(files) == 1, files
-        print("private storage OK:", files[0].name[:20] + "...")
+        orig_files = [p for p in storage.rglob("*") if p.is_file()]
+        assert len(orig_files) == 1, orig_files
+        print("private storage OK:", orig_files[0].name[:20] + "...")
+
+        # Run the real worker once against the same DB + storage.
+        worker = subprocess.run(
+            [sys.executable, "-m", "app.workers.runner", "--once"],
+            cwd=str(REPO),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert worker.returncode == 0, worker.stderr[-2000:]
+        print("worker ran OK")
+
+        # The document is now preprocessed (pages ready, no OCR claimed).
+        status = client.get(f"/api/v1/documents/{doc_id}/processing", headers=headers)
+        assert status.status_code == 200, status.text
+        sbody = status.json()
+        print(
+            "processing status:",
+            sbody["processing_state"],
+            "pages_processed=",
+            sbody["pages_processed"],
+            "artifacts_ready=",
+            sbody["artifacts_ready"],
+        )
+        assert sbody["processing_state"] == "preprocessed"
+        assert sbody["pages_processed"] == 1
+        assert sbody["artifacts_ready"] is True
+        assert "storage_key" not in sbody
+        assert "processed_storage_key" not in sbody
+
+        # A page artifact now exists alongside the original (2 files total).
+        all_files = [p for p in storage.rglob("*") if p.is_file()]
+        assert len(all_files) == 2, all_files
+        print("page artifact written privately OK")
 
         print("SMOKE TEST PASSED")
         return 0

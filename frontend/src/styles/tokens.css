@@ -1,0 +1,136 @@
+/* =====================================================================
+   Unmist design tokens
+   One restrained theme: dark ink shell, light reading workspace,
+   electric indigo accent, slate secondary, semantic states.
+   ===================================================================== */
+
+:root {
+  /* --- Brand / accent ------------------------------------------------ */
+  --accent-50: #eef2ff;
+  --accent-100: #e0e7ff;
+  --accent-200: #c7d2fe;
+  --accent-300: #a5b4fc;
+  --accent-400: #818cf8;
+  --accent-500: #6366f1;
+  --accent-600: #4f46e5;
+  --accent-700: #4338ca;
+  --accent-800: #3730a3;
+  --accent: var(--accent-600);
+  --accent-hover: var(--accent-700);
+  --accent-soft: var(--accent-50);
+
+  /* --- Ink shell (navigation) --------------------------------------- */
+  --ink-950: #0b1020;
+  --ink-900: #111731;
+  --ink-850: #161d3a;
+  --ink-800: #1c2447;
+  --ink-700: #2a3358;
+  --ink-600: #3b4570;
+  --shell-bg: var(--ink-950);
+  --shell-surface: var(--ink-900);
+  --shell-border: rgba(255, 255, 255, 0.08);
+  --shell-text: #e8ebf7;
+  --shell-text-muted: #98a1c4;
+  --shell-text-dim: #6e789e;
+
+  /* --- Surfaces (light workspace) ----------------------------------- */
+  --bg: #f6f7fb;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f0f2f8;
+  --surface-hover: #f7f8fc;
+  --surface-inverse: var(--ink-900);
+
+  /* --- Text ---------------------------------------------------------- */
+  --text: #131a2e;
+  --text-secondary: #4b5675;
+  --text-muted: #707a9b;
+  --text-inverse: #ffffff;
+
+  /* --- Borders ------------------------------------------------------- */
+  --border: #e4e7f1;
+  --border-strong: #d3d8e8;
+  --border-focus: var(--accent-500);
+
+  /* --- Semantic states ---------------------------------------------- */
+  --success: #16855a;
+  --success-soft: #e6f6ef;
+  --success-border: #b3e3d0;
+  --warning: #b06a08;
+  --warning-soft: #fdf3e3;
+  --warning-border: #f5ddb4;
+  --danger: #c62f3f;
+  --danger-soft: #fdedee;
+  --danger-border: #f6c9ce;
+  --info: #1f6fb2;
+  --info-soft: #e8f2fb;
+  --info-border: #c2ddf3;
+  --neutral-soft: #eef0f6;
+  --neutral-border: #dde1ed;
+
+  /* --- Spacing scale (4px base) -------------------------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 56px;
+  --space-10: 72px;
+
+  /* --- Radii --------------------------------------------------------- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  /* --- Shadows ------------------------------------------------------- */
+  --shadow-xs: 0 1px 2px rgba(17, 23, 49, 0.06);
+  --shadow-sm: 0 1px 3px rgba(17, 23, 49, 0.08), 0 1px 2px rgba(17, 23, 49, 0.04);
+  --shadow-md: 0 4px 12px rgba(17, 23, 49, 0.08), 0 2px 4px rgba(17, 23, 49, 0.04);
+  --shadow-lg: 0 12px 32px rgba(17, 23, 49, 0.12), 0 4px 8px rgba(17, 23, 49, 0.05);
+  --shadow-focus: 0 0 0 3px rgba(99, 102, 241, 0.35);
+
+  /* --- Typography ---------------------------------------------------- */
+  --font-sans:
+    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14.5px;
+  --text-md: 16px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --text-3xl: 34px;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.55;
+  --leading-relaxed: 1.7;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* --- Motion -------------------------------------------------------- */
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+  --ease: cubic-bezier(0.2, 0.6, 0.3, 1);
+
+  /* --- Layout -------------------------------------------------------- */
+  --sidebar-w: 244px;
+  --topbar-h: 60px;
+  --content-max: 1240px;
+  --z-drawer: 60;
+  --z-modal: 80;
+  --z-toast: 100;
+}

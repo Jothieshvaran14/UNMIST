@@ -11,10 +11,10 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from ...errors import NotFoundError, ValidationError
+from ...errors import AuthorizationError, NotFoundError, ValidationError
 from ...models.knowledge import (
     Claim,
     Concept,
@@ -28,6 +28,7 @@ from ...models.knowledge import (
     Topic,
     VerificationStatus,
 )
+from ...models.org import OrgMembership
 from .concept_extraction import ConceptExtractor, ExtractionResult
 from .validation import (
     ConceptDraft,
@@ -83,12 +84,88 @@ def get_topic(session: Session, topic_id: str) -> Topic:
     return topic
 
 
-def list_topics(session: Session, *, org_id: Optional[str], limit: int, offset: int):
-    query = select(Topic).where(Topic.org_id == org_id).order_by(Topic.created_at.desc())
-    total = session.execute(
-        select(func.count()).select_from(Topic).where(Topic.org_id == org_id)
-    ).scalar_one()
-    items = session.execute(query.limit(limit).offset(offset)).scalars().all()
+def authorize_topic_access(session: Session, *, topic: Topic, user) -> None:
+    """Enforce who may read or write a topic.
+
+    This is the single canonical rule for topic visibility, shared by the
+    knowledge routes and the learning (question/assessment) routes so the two
+    can never drift apart:
+
+      * a personal topic (``org_id IS NULL``) is private to its creator;
+      * an organization topic is readable/writable by its members only.
+
+    Questions inherit their visibility from their topic, so every question or
+    rubric lookup must resolve through here. Without that hop a bare
+    ``session.get`` would let any authenticated caller read another tenant's
+    ``reference_answer``.
+    """
+    if topic.org_id is None:
+        if topic.created_by != user.id:
+            raise AuthorizationError("You do not have access to this topic")
+        return
+    membership = session.execute(
+        select(OrgMembership).where(
+            OrgMembership.org_id == topic.org_id,
+            OrgMembership.user_id == user.id,
+        )
+    ).scalar_one_or_none()
+    if membership is None:
+        raise AuthorizationError("You are not a member of this organization")
+
+
+def _viewer_visibility(topic_alias, viewer_id: str):
+    """SQL fragment matching :func:`authorize_topic_access` for one viewer.
+
+    Kept next to the authorization rule so the query filter and the guard
+    cannot silently disagree: personal topics are visible only to their
+    creator, organization topics only to members of that organization.
+    """
+    member_orgs = (
+        select(OrgMembership.org_id)
+        .where(OrgMembership.user_id == viewer_id)
+        .scalar_subquery()
+    )
+    return or_(
+        and_(topic_alias.org_id.is_(None), topic_alias.created_by == viewer_id),
+        topic_alias.org_id.in_(member_orgs),
+    )
+
+
+def list_topics(
+    session: Session,
+    *,
+    org_id: Optional[str],
+    limit: int,
+    offset: int,
+    viewer_id: Optional[str] = None,
+):
+    """List topics, scoped to what ``viewer_id`` is actually allowed to see.
+
+    ``viewer_id`` is required in practice: passing ``None`` would widen the
+    result set to every personal topic of every user, so the parameter is
+    treated as mandatory whenever a filter is wanted. ``org_id`` narrows
+    further to a single organization once visibility is established.
+    """
+    scope = []
+    if viewer_id is not None:
+        scope.append(_viewer_visibility(Topic, viewer_id))
+    if org_id is not None:
+        scope.append(Topic.org_id == org_id)
+
+    count_query = select(func.count()).select_from(Topic)
+    query = select(Topic)
+    for clause in scope:
+        count_query = count_query.where(clause)
+        query = query.where(clause)
+
+    total = session.execute(count_query).scalar_one()
+    items = (
+        session.execute(
+            query.order_by(Topic.created_at.desc()).limit(limit).offset(offset)
+        )
+        .scalars()
+        .all()
+    )
     return list(items), int(total)
 
 

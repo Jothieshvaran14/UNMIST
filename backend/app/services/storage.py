@@ -99,7 +99,8 @@ def generate_document_key(document_id: str, *, kind: str = "originals", suffix: 
     """Build an opaque, app-generated key for a document artifact.
 
     The user's filename is never part of the key; it is kept only as display
-    metadata on the document row.
+    metadata on the document row. The key carries a random token, so two
+    uploads of identical bytes still get distinct storage objects.
     """
     if kind not in {"originals", "pages", "derived"}:
         raise ValidationError(f"Unknown storage kind '{kind}'", code="invalid_key")
@@ -107,6 +108,26 @@ def generate_document_key(document_id: str, *, kind: str = "originals", suffix: 
     safe_id = _validate_key(document_id)
     tail = f"-{suffix}" if suffix else ""
     key = f"documents/{safe_id}/{kind}/{token}{tail}"
+    return _validate_key(key)
+
+
+def generate_page_key(document_id: str, page_number: int, *, content_hash: str) -> str:
+    """Build a **deterministic** key for a preprocessed page artifact.
+
+    Unlike ``generate_document_key`` the key is derived from ``(document,
+    page_number, content_hash)`` rather than a random token. That makes page
+    artifact writes idempotent: a redelivered or retried job recomputes the same
+    key, finds the object already present, and reuses it instead of creating a
+    duplicate. Because the content hash is part of the key, reprocessing a page
+    whose pixels changed naturally produces a new object.
+    """
+    if page_number < 1:
+        raise ValidationError("page_number must be >= 1", code="invalid_key")
+    safe_id = _validate_key(document_id)
+    safe_hash = content_hash.lower()[:64]
+    if not re.fullmatch(r"[0-9a-f]{6,64}", safe_hash):
+        raise ValidationError("content_hash must be hexadecimal", code="invalid_key")
+    key = f"documents/{safe_id}/pages/p{page_number:05d}-{safe_hash}.png"
     return _validate_key(key)
 
 

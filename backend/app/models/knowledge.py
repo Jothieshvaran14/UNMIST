@@ -30,6 +30,7 @@ from sqlalchemy.types import JSON
 
 from ..db import Base
 from .base import GUID, IdMixin, TimestampMixin, UTCDateTime, utcnow
+from .documents import SegmentationStatus
 
 
 class SourceType(str, Enum):
@@ -157,6 +158,36 @@ class SourceDocument(IdMixin, TimestampMixin, Base):
     last_job_id: Mapped[Optional[str]] = mapped_column(
         GUID, ForeignKey("jobs.id", ondelete="SET NULL"), index=True, nullable=True
     )
+    # --- segmentation lifecycle (Checkpoint E) ----------------------------
+    # Tracked independently of ``processing_state`` so segmentation can fail or
+    # be re-run without mutating the OCR pipeline's state machine. ``not_run``
+    # is the default: a prepared/recognized document is not automatically
+    # segmented, and absence of segments never implies failure.
+    segmentation_status: Mapped[str] = mapped_column(
+        String(30),
+        default=SegmentationStatus.not_run.value,
+        nullable=False,
+        index=True,
+    )
+    # Algorithm version of the last completed segmentation (reprocessing /
+    # version-change provenance; see ``DocumentSegment.algorithm_version``).
+    segmentation_version: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True
+    )
+    # Bounded, safe segmentation failure category + detail; never exception text.
+    segmentation_error_category: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True
+    )
+    segmentation_error_detail: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True
+    )
+    last_segment_job_id: Mapped[Optional[str]] = mapped_column(
+        GUID, ForeignKey("jobs.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    # Monotonic run counter; gives each reprocessing request a distinct job
+    # idempotency key so a second run is a new job while a concurrent first
+    # request still de-duplicates.
+    segmentation_run: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # --- original content -------------------------------------------------
     title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     url: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)

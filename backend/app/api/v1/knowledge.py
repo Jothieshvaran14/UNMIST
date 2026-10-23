@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from ...db import get_db
-from ...errors import AuthorizationError, NotFoundError
+from ...errors import NotFoundError
 from ...models import Topic, User
 from ...schemas.common import Page
 from ...schemas.knowledge import (
@@ -24,7 +24,7 @@ from ...schemas.knowledge import (
     TopicCreateRequest,
     TopicResponse,
 )
-from ...security.dependencies import get_current_user, get_membership
+from ...security.dependencies import get_current_user
 from ...services import jobs as job_service
 from ...services.audit import record_audit
 from ...services.knowledge import graph_service, ingestion
@@ -34,13 +34,13 @@ router = APIRouter(prefix="/topics", tags=["knowledge"])
 
 
 def _authorize_topic(session: Session, topic: Topic, user: User) -> None:
-    if topic.org_id is None:
-        if topic.created_by != user.id:
-            raise AuthorizationError("You do not have access to this topic")
-        return
-    membership = get_membership(session, user.id, topic.org_id)
-    if membership is None:
-        raise AuthorizationError("You are not a member of this organization")
+    """Guard a topic route. Delegates to the canonical service-layer rule.
+
+    Keeping the decision in :func:`graph_service.authorize_topic_access` means
+    the learning routes (which resolve questions through their topic) enforce
+    exactly the same policy rather than a second copy of it.
+    """
+    graph_service.authorize_topic_access(session, topic=topic, user=user)
 
 
 @router.post("", response_model=TopicResponse, status_code=status.HTTP_201_CREATED)
@@ -73,8 +73,15 @@ def list_topics(
     from ...api.deps import pagination
 
     page = pagination(limit=limit, offset=offset)
+    # Scoped to the caller: personal topics are the creator's alone, and
+    # organization topics are limited to orgs the caller belongs to. Without
+    # this the endpoint returned every user's personal topics.
     items, total = graph_service.list_topics(
-        session, org_id=None, limit=page.limit, offset=page.offset
+        session,
+        org_id=None,
+        limit=page.limit,
+        offset=page.offset,
+        viewer_id=actor.id,
     )
     return Page.create(
         [TopicResponse.model_validate(item) for item in items], total, page.limit, page.offset

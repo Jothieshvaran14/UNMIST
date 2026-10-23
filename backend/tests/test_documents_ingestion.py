@@ -94,7 +94,9 @@ def test_upload_png_is_persisted_and_scheduled(client, auth_headers, storage_dir
     assert resp.status_code == 201, resp.text
     body = resp.json()
 
-    assert body["processing_state"] == DocumentProcessingState.uploaded.value
+    # Uploading enqueues a processing job, so the document is already `queued`
+    # (Checkpoint C makes the persisted state consistent with the job).
+    assert body["processing_state"] == DocumentProcessingState.queued.value
     assert body["media_type"] == "image/png"
     assert body["page_count"] == 1
     assert body["size_bytes"] > 0
@@ -148,6 +150,46 @@ def test_duplicate_upload_returns_existing_document(
     assert len(stored) == 1
     docs = db_session.query(SourceDocument).all()
     assert len(docs) == 1
+
+
+def test_processing_status_endpoint_reports_safe_progress(
+    client, auth_headers, db_session, storage_dir
+):
+    resp = _upload(client, auth_headers, _png_bytes(), "status.png")
+    assert resp.status_code == 201, resp.text
+    doc_id = resp.json()["id"]
+
+    status_resp = client.get(
+        f"/api/v1/documents/{doc_id}/processing", headers=auth_headers
+    )
+    assert status_resp.status_code == 200, status_resp.text
+    body = status_resp.json()
+    # The document is queued (not yet processed by a worker).
+    assert body["processing_state"] == DocumentProcessingState.queued.value
+    assert body["pages_processed"] == 0
+    assert body["artifacts_ready"] is False
+    assert body["last_job_id"]
+    # No private storage details leak through the status endpoint.
+    assert "storage_key" not in body
+    assert "processed_storage_key" not in body
+    assert "storage" not in body
+
+
+def test_processing_status_endpoint_is_idor_safe(
+    client, auth_headers, second_user, storage_dir
+):
+    resp = _upload(client, auth_headers, _png_bytes(), "private.png")
+    assert resp.status_code == 201, resp.text
+    doc_id = resp.json()["id"]
+
+    # A different authenticated user must not see this document's status.
+    other_headers = {
+        "Authorization": f"Bearer {second_user['tokens']['access_token']}"
+    }
+    denied = client.get(
+        f"/api/v1/documents/{doc_id}/processing", headers=other_headers
+    )
+    assert denied.status_code == 404
 
 
 # --- upload rejection ------------------------------------------------------
@@ -264,10 +306,13 @@ def test_org_upload_succeeds_for_member(client, auth_headers, storage_dir):
 
 
 def test_state_machine_allows_the_documented_lifecycle():
+    # The full happy path now includes `preprocessed`: pages are prepared,
+    # then OCR (a later checkpoint) runs, then review/completion.
     path = [
         DocumentProcessingState.uploaded,
         DocumentProcessingState.queued,
         DocumentProcessingState.preprocessing,
+        DocumentProcessingState.preprocessed,
         DocumentProcessingState.ocr_processing,
         DocumentProcessingState.review_required,
         DocumentProcessingState.completed,
@@ -276,6 +321,20 @@ def test_state_machine_allows_the_documented_lifecycle():
     ]
     for current, target in zip(path, path[1:]):
         assert can_transition(current, target), f"{current} -> {target}"
+
+
+def test_preprocessing_success_never_jumps_to_completed_or_ocr():
+    # Preprocessing prepares pages; it must not imply OCR ran or that the
+    # document is finished.
+    assert not can_transition(
+        DocumentProcessingState.preprocessing, DocumentProcessingState.completed
+    )
+    assert not can_transition(
+        DocumentProcessingState.preprocessing, DocumentProcessingState.ocr_processing
+    )
+    assert can_transition(
+        DocumentProcessingState.preprocessing, DocumentProcessingState.preprocessed
+    )
 
 
 def test_state_machine_rejects_illegal_jumps():
