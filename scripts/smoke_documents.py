@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import io
 import os
+import secrets
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -28,11 +30,16 @@ def make_png() -> bytes:
 
 
 def main() -> int:
+    # Use the system temp directory so this script is machine-independent and
+    # never embeds a developer-specific path.
+    tmp = Path(tempfile.gettempdir()) / "unmist_smoke"
+    tmp.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["PYTHONPATH"] = "backend"
-    env["DATABASE_URL"] = "sqlite:///C:/Users/jothi/AppData/Local/Temp/opencode/unmist_smoke.db"
-    env["STORAGE_LOCAL_DIR"] = "C:/Users/jothi/AppData/Local/Temp/opencode/unmist_smoke_storage"
-    env["SECRET_KEY"] = "smoke-secret-key-that-is-long-enough-0123456789abcdef"
+    env["DATABASE_URL"] = f"sqlite:///{tmp / 'unmist_smoke.db'}"
+    env["STORAGE_LOCAL_DIR"] = str(tmp / "storage")
+    # Generated per run: a test-only signing key, never a real credential.
+    env["SECRET_KEY"] = secrets.token_urlsafe(48)
     env["ENVIRONMENT"] = "test"
 
     # The app does not create tables at startup; apply migrations to the fresh

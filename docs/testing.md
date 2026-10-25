@@ -201,7 +201,9 @@ constraint inspection above, and the full suite against it.
   every other table here); the migration and schema checks are SQLite-only.
 - **No security scanning** (SAST/dependency) — the CI pipeline runs
   lint/type/test/migration checks only (`.github/workflows/ci.yml`).
-- **No frontend tests** — there is no frontend yet.
+- **No frontend tests** — the React SPA in `frontend/` has no unit or
+  end-to-end suite; it is type-checked (`npm run typecheck`) and built
+  (`npm run build`) only.
 - **Sandbox escape testing.** The sandbox is a baseline subprocess; its
   resistance to a determined escape has not been adversarially tested. See
   [`security.md`](security.md).

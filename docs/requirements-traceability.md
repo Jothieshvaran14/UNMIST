@@ -205,7 +205,7 @@ production-readiness gap report. Two verified cross-tenant defects were fixed.
 | Question/answer segmentation | Implemented (structure-only, Checkpoint E) | Deterministic rules over OCR regions; categorical uncertainty; never alters OCR evidence; **no** accuracy claim — behavior verified on synthetic fixtures only, and no labeled benchmark exists. Does not decide whether an answer is correct (assessment, out of scope). |
 | TrOCR model weights in this environment | Blocked | The ~1.27 GB `model.safetensors` download is egress-blocked, so real TrOCR inference and real-region segmentation remain unverified. Run `scripts/download_trocr_model.py` on a host with HuggingFace CDN access, then the opt-in smoke test. |
 | OCR in the base install | Opt-in extra | Without `ocr` extra, `OCR_PROVIDER=trocr` fails with a permanent `ocr_unavailable` error |
-| Frontend | Not implemented | — |
+| Frontend | Implemented (React SPA) | `frontend/`: all primary screens type-check and build. **No frontend test suite** exists. |
 | CI security scanning (SAST / dependency scanning) | Not implemented | CI runs lint/type/test/migration only |
 | Hardened multi-tenant sandbox | Not implemented | Baseline subprocess isolation only |
 | Calibrated mastery model | Not implemented | Fixed defaults, marked `provisional-v1` |

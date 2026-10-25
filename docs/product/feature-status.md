@@ -11,7 +11,7 @@ Legend:
 - ❌ **Not implemented** — the boundary exists and fails loudly; no functionality
   is claimed.
 
-Last verified: full backend suite **250 passed, 1 skipped** (opt-in real-model
+Last verified: full backend suite **262 passed, 1 skipped** (opt-in real-model
 smoke test) on Python 3.10 / SQLite.
 
 ---
@@ -308,7 +308,8 @@ closed afterwards; regression tests now guard them permanently in
   PDF renderer. Install the optional `pdf` extra (`pypdfium2`, BSD-3-Clause /
   Apache-2.0) to enable it. Without it, PDFs that require rasterization fail with
   a clear, permanent `pdf_renderer_unavailable` error rather than a wrong result.
-- **Frontend.** Backend only.
+- **Frontend.** A React SPA now covers the primary screens (see `frontend/`),
+  but it has **no test suite** — it is type-checked and built only.
 - **CI security scanning (SAST / dependency scanning).** A CI pipeline runs
   lint/type/test/migration checks, but no SAST or dependency-vulnerability
   scanning is configured.
