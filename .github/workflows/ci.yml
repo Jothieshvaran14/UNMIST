@@ -17,6 +17,9 @@ jobs:
       SECRET_KEY: ci-test-secret-key-not-for-production-use-0123456789
       DATABASE_URL: sqlite:///./data/ci.db
       ENVIRONMENT: test
+      # Backend packages resolve as ``app.*``; scripts and tests import them
+      # with the repo's ``backend/`` directory on the path.
+      PYTHONPATH: backend
 
     steps:
       - uses: actions/checkout@v4
@@ -39,21 +42,64 @@ jobs:
         run: python -m isort --profile black --line-length 100 --check-only backend/app backend/tests scripts
 
       - name: Type check (mypy)
-        env:
-          PYTHONPATH: backend
         run: python -m mypy backend/app --ignore-missing-imports
 
+      # Fresh checkouts have no data/ directory (it is gitignored), and the
+      # SQLite URI sqlite:///./data/ci.db fails without it.
+      - name: Create SQLite data directory
+        run: mkdir -p data
+
       - name: Apply migrations
-        env:
-          PYTHONPATH: backend
         run: python -m alembic upgrade head
 
       - name: Verify migration matches models
-        env:
-          PYTHONPATH: backend
         run: python scripts/verify_migration.py data/ci.db
 
       - name: Run tests
-        env:
-          PYTHONPATH: backend
         run: python -m pytest backend/tests -q
+
+      # Informational: several pinned dependencies carry known advisories that
+      # have no fixed release yet (e.g. python-jose/ecdsa), so this step reports
+      # without gating. Tracked in docs/product/feature-status.md.
+      - name: Dependency audit (pip-audit, informational)
+        continue-on-error: true
+        run: |
+          python -m pip install --quiet pip-audit
+          python -m pip_audit -r requirements.txt
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check (tsc)
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
+
+      # Gate: production dependencies must have no high/critical advisories.
+      # (Moderate react-router advisories are still printed in the log and are
+      # documented as deferred pending the react-router v7 upgrade.)
+      - name: Production dependency audit (npm audit)
+        run: npm audit --omit=dev --audit-level=high
+
+      # Informational: includes dev-tooling advisories (vite/esbuild dev server)
+      # and the deferred moderate react-router advisories.
+      - name: Full dependency audit (informational)
+        continue-on-error: true
+        run: npm audit

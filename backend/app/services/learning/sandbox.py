@@ -52,19 +52,25 @@ def _posix_limits(cpu_seconds: int, memory_mb: int):
     import resource
 
     def apply() -> None:  # pragma: no cover - executed in the child
-        # ``resource`` is POSIX-only; typeshed has no stubs for it on Windows.
-        resource.setrlimit(  # type: ignore[attr-defined]
-            resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 1)  # type: ignore[attr-defined]
+        # ``resource`` is POSIX-only: typeshed's stubs are guarded by platform,
+        # so the attribute errors only appear when checking on Windows. The
+        # ``unused-ignore`` code keeps the ignores valid on both platforms
+        # (``warn_unused_ignores`` is enabled in pyproject.toml).
+        resource.setrlimit(  # type: ignore[attr-defined, unused-ignore]
+            resource.RLIMIT_CPU,  # type: ignore[attr-defined, unused-ignore]
+            (cpu_seconds, cpu_seconds + 1),
         )
-        resource.setrlimit(  # type: ignore[attr-defined]
-            resource.RLIMIT_AS,  # type: ignore[attr-defined]
+        resource.setrlimit(  # type: ignore[attr-defined, unused-ignore]
+            resource.RLIMIT_AS,  # type: ignore[attr-defined, unused-ignore]
             (memory_mb * 1024 * 1024, memory_mb * 1024 * 1024),
         )
-        resource.setrlimit(  # type: ignore[attr-defined]
-            resource.RLIMIT_NOFILE, (32, 32)  # type: ignore[attr-defined]
+        resource.setrlimit(  # type: ignore[attr-defined, unused-ignore]
+            resource.RLIMIT_NOFILE,  # type: ignore[attr-defined, unused-ignore]
+            (32, 32),
         )
-        resource.setrlimit(  # type: ignore[attr-defined]
-            resource.RLIMIT_NPROC, (16, 16)  # type: ignore[attr-defined]
+        resource.setrlimit(  # type: ignore[attr-defined, unused-ignore]
+            resource.RLIMIT_NPROC,  # type: ignore[attr-defined, unused-ignore]
+            (16, 16),
         )
 
     return apply
