@@ -9,7 +9,7 @@
  *   - a transient error keeps the last known status and offers a manual refresh
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -22,6 +22,7 @@ import {
   RefreshCw,
   ScanText,
   Split,
+  Trash2,
   TriangleAlert,
 } from "lucide-react";
 import { useAsyncData, usePolling } from "@/hooks/useAsyncData";
@@ -34,6 +35,7 @@ import {
   EmptyState,
   ErrorState,
   LoadingRow,
+  Modal,
   toUserMessage,
   useToast,
 } from "@/components/ui";
@@ -60,6 +62,19 @@ const PREP_DONE = new Set(["preprocessed", "ocr_processing", "review_required", 
 const OCR_DONE = new Set(["completed"]);
 const OCR_ACTIVE = new Set(["ocr_processing"]);
 
+/**
+ * True when a `failed` document's bounded error category places the failure in
+ * recognition (the server persists only `DocumentErrorCategory` values, so an
+ * `ocr_*` category means preparation succeeded and recognition is what broke).
+ * Shared by the stage timeline and the failure notice so they never disagree.
+ */
+function ocrStageFailed(
+  state: string | null,
+  processing: DocumentProcessingStatus | null,
+): boolean {
+  return state === "failed" && (processing?.error_category ?? "").startsWith("ocr_");
+}
+
 function buildStages(
   state: string | null,
   processing: DocumentProcessingStatus | null,
@@ -68,11 +83,17 @@ function buildStages(
   reviewed: number,
   totalSegments: number,
 ): Stage[] {
+  // On failure the bounded error category says WHICH stage broke — never
+  // guessed from timing or free text.
+  const ocrFailed = ocrStageFailed(state, processing);
+
   const prepKind: StageKind =
     state === "queued" || state === "preprocessing"
       ? "active"
-      : state === "failed" && !processing?.artifacts_ready
-        ? "error"
+      : state === "failed"
+        ? ocrFailed
+          ? "done"
+          : "error"
         : state && PREP_DONE.has(state)
           ? "done"
           : state === "cancelled" || state === "deleted"
@@ -80,7 +101,7 @@ function buildStages(
             : "pending";
 
   let ocrKind: StageKind;
-  if (state === "failed") ocrKind = processing?.artifacts_ready ? "error" : "unavailable";
+  if (state === "failed") ocrKind = ocrFailed ? "error" : "unavailable";
   else if (state && OCR_ACTIVE.has(state)) ocrKind = "active";
   else if (state === "review_required") ocrKind = "review";
   else if (state && OCR_DONE.has(state)) ocrKind = "done";
@@ -124,9 +145,11 @@ function buildStages(
   }
 
   const prepared =
-    processing && state && PREP_DONE.has(state)
-      ? `${processing.pages_processed} of ${processing.page_count} pages prepared`
-      : "Rasterize and normalize every page into working images.";
+    state === "failed" && !ocrFailed
+      ? "Preparation stopped with an error; the bounded category is shown below."
+      : processing && state && PREP_DONE.has(state)
+        ? `${processing.pages_processed} of ${processing.page_count} pages prepared`
+        : "Rasterize and normalize every page into working images.";
 
   const reviewedLabel =
     totalSegments > 0
@@ -157,7 +180,7 @@ function buildStages(
             : ocrKind === "review"
               ? "Recognition finished for some pages; a human should look."
               : ocrKind === "error"
-                ? "Recognition stopped with an error."
+                ? `Recognition stopped with an error (${processing?.error_category ?? "category unavailable"}).`
                 : ocrKind === "unavailable"
                   ? "Not applicable in the document's current state."
                   : "Waiting for page preparation to finish.",
@@ -217,6 +240,21 @@ export function DocumentDetailPage() {
   const [segmenting, setSegmenting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // OCR trigger: `ocrRequesting` guards against duplicate submissions while a
+  // request is in flight; the server additionally de-duplicates, so a repeat
+  // can never schedule a second run.
+  const [ocrRequesting, setOcrRequesting] = useState(false);
+  const [ocrActionError, setOcrActionError] = useState<string | null>(null);
+
+  // Deletion: `deleting` blocks a second submit, `deleteError` keeps an honest
+  // failure visible, and `deletionPhase` only advances to "confirmed" once the
+  // SERVER reports the document gone (reads start returning 404) — never on
+  // the strength of the 202 alone.
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletionPhase, setDeletionPhase] = useState<"idle" | "scheduled" | "confirmed">("idle");
+
   const doc = useAsyncData((signal) => api.getDocument(documentId, signal), [documentId]);
   const processing = useAsyncData(
     (signal) => api.getProcessingStatus(documentId, signal),
@@ -229,6 +267,8 @@ export function DocumentDetailPage() {
 
   const state = doc.data?.processing_state ?? processing.data?.processing_state ?? null;
   const segState = segStatus.data?.segmentation_status ?? null;
+  // Which stage failed, from the server's bounded category (see ocrStageFailed).
+  const ocrFailed = ocrStageFailed(state, processing.data);
 
   const refreshAll = useCallback(() => {
     doc.reload();
@@ -293,7 +333,118 @@ export function DocumentDetailPage() {
     }
   }
 
+  /** States the backend accepts for a fresh recognition run. */
+  const ocrEligible =
+    state === "preprocessed" ||
+    state === "review_required" ||
+    // A failed document is only worth retrying when preparation succeeded and
+    // recognition is what broke: with no prepared pages the API would accept
+    // the request (202) and permanently fail it again, so offering the action
+    // would promise something the server cannot do.
+    (state === "failed" && ocrFailed);
+  /** Preparation or recognition is already running — no second submission. */
+  const ocrInFlight =
+    state === "queued" || state === "preprocessing" || state === "ocr_processing";
+  const deletionPending = state === "deletion_pending" || deletionPhase === "scheduled";
+
+  async function startOcr() {
+    // Guard first: never fire a second request while one is in flight.
+    if (ocrRequesting || ocrInFlight || deletionPending) return;
+    setOcrRequesting(true);
+    setOcrActionError(null);
+    try {
+      await api.requestOcr(documentId);
+      toast.success(
+        "Recognition requested",
+        "The server accepted a provisional run. Recognized text stays provisional until a human reviews it.",
+      );
+      refreshAll();
+    } catch (err) {
+      if (err instanceof ApiClientError) {
+        if (err.status === 409) {
+          setOcrActionError(
+            err.message ||
+              "Recognition cannot start in the document's current state.",
+          );
+        } else if (err.status === 404) {
+          setOcrActionError(
+            "This document no longer exists — it may have been deleted.",
+          );
+        } else if (err.isRetryable) {
+          setOcrActionError(
+            "Could not reach the server. The request is safe to retry — repeating it cannot start a second run.",
+          );
+        } else {
+          setOcrActionError(toUserMessage(err));
+        }
+      } else {
+        setOcrActionError(toUserMessage(err));
+      }
+    } finally {
+      setOcrRequesting(false);
+    }
+  }
+
+  async function confirmDeletion() {
+    // Guard first: one deletion request at a time.
+    if (deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api.deleteDocument(documentId);
+      // 202 = deletion *scheduled*. Success is only reported once reads 404.
+      setDeletionPhase("scheduled");
+      setDeleteOpen(false);
+      toast.success(
+        "Deletion requested",
+        "Waiting for the server to confirm that the document is actually gone.",
+      );
+      refreshAll();
+    } catch (err) {
+      if (err instanceof ApiClientError && err.status === 404) {
+        // Already purged (e.g. deleted from another tab): reads 404 too.
+        setDeletionPhase("confirmed");
+        setDeleteOpen(false);
+        toast.success("Document deleted", "The server reports it is already gone.");
+        navigate("/documents");
+        return;
+      }
+      // Any other failure stays visible and truthful — no success is claimed.
+      setDeleteError(toUserMessage(err));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  // Success criterion: the backend itself stops serving the document (404).
+  useEffect(() => {
+    if (deletionPhase !== "scheduled") return;
+    if (doc.error instanceof ApiClientError && doc.error.status === 404) {
+      setDeletionPhase("confirmed");
+      toast.success(
+        "Document deleted",
+        "Storage, page artifacts and derived rows were removed; an audit tombstone remains.",
+      );
+      navigate("/documents");
+    }
+  }, [deletionPhase, doc.error, navigate, toast]);
+
   if (doc.initialLoading) return <LoadingRow label="Loading document…" />;
+  // While a confirmed deletion is in flight, the expected 404 is progress —
+  // not an error to show the user.
+  if (deletionPhase === "scheduled" && doc.error instanceof ApiClientError && doc.error.status === 404) {
+    return (
+      <>
+        <BackLink />
+        <div className="card card--pad">
+          <div className="row gap-2 text-sm">
+            <span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" />
+            Finishing deletion — the server has stopped serving this document…
+          </div>
+        </div>
+      </>
+    );
+  }
   if (doc.error && !doc.data) {
     return (
       <>
@@ -351,8 +502,31 @@ export function DocumentDetailPage() {
           >
             Refresh
           </Button>
+          {ocrEligible && (
+            <Button
+              variant="primary"
+              onClick={startOcr}
+              loading={ocrRequesting}
+              disabled={deletionPending}
+              icon={<ScanText />}
+              title="Start a provisional recognition run"
+            >
+              {ocrFailed ? "Retry recognition" : "Run text recognition"}
+            </Button>
+          )}
+          {ocrInFlight && (
+            <Button variant="primary" disabled icon={<Loader2 className="icon-spin" />}>
+              Recognition in progress
+            </Button>
+          )}
           {canSegment && (
-            <Button variant="primary" onClick={startSegmentation} loading={segmenting} icon={<Split />}>
+            <Button
+              variant="secondary"
+              onClick={startSegmentation}
+              loading={segmenting}
+              icon={<Split />}
+              disabled={deletionPending}
+            >
               Segment document
             </Button>
           )}
@@ -361,12 +535,39 @@ export function DocumentDetailPage() {
               Review segments ({seg?.total_segments})
             </Button>
           )}
+          <Button
+            variant="danger"
+            icon={<Trash2 />}
+            onClick={() => {
+              setDeleteError(null);
+              setDeleteOpen(true);
+            }}
+            disabled={deletionPending}
+          >
+            Delete
+          </Button>
         </div>
       </div>
 
       {actionError && (
         <div style={{ marginBottom: "var(--space-4)" }}>
           <Alert tone="danger" title="Could not start segmentation">{actionError}</Alert>
+        </div>
+      )}
+
+      {ocrActionError && (
+        <div style={{ marginBottom: "var(--space-4)" }}>
+          <Alert tone="danger" title="Recognition not started">{ocrActionError}</Alert>
+        </div>
+      )}
+
+      {deletionPhase === "scheduled" && (
+        <div style={{ marginBottom: "var(--space-4)" }}>
+          <Alert tone="warning" title="Deletion in progress">
+            The server accepted the deletion and stopped scheduling new work for this
+            document. Storage cleanup is still running — deletion is reported as finished only
+            once the server stops serving the document.
+          </Alert>
         </div>
       )}
 
@@ -381,8 +582,9 @@ export function DocumentDetailPage() {
             {document.error_detail || "No further detail was recorded."}
             {processing.data?.retry_available && (
               <div className="mt-2 text-xs">
-                The backend marks this document retryable, but there is no retry endpoint exposed
-                to the API yet — re-uploading the same file creates a new record.
+                {ocrFailed
+                  ? "Preparation succeeded, so “Retry recognition” re-runs recognition over the prepared pages. Repeating the request never starts a second run."
+                  : "Preparation did not finish, so recognition has nothing to read. The API exposes no endpoint to re-run preparation — re-uploading the same file creates a new record."}
               </div>
             )}
           </Alert>
@@ -565,6 +767,15 @@ export function DocumentDetailPage() {
                           <Badge tone="neutral">{segment.segment_type}</Badge>
                         </span>
                       </span>
+                      <span>
+                        <span
+                          className={`prov ${segment.review_status === "pending" ? "prov--inference" : "prov--reviewed"}`}
+                        >
+                          {segment.review_status === "pending"
+                            ? "inferred structure"
+                            : "human reviewed"}
+                        </span>
+                      </span>
                       <span className="seg-item__text">
                         {segment.effective_text || segment.text || "(no text)"}
                       </span>
@@ -630,6 +841,15 @@ export function DocumentDetailPage() {
                             ? ` · confidence ${region.confidence} (server-provided)`
                             : ""}
                         </span>
+                        <span style={{ display: "block", marginTop: 5 }}>
+                          <span
+                            className={`prov ${region.review_status === "pending" ? "prov--suggestion" : "prov--reviewed"}`}
+                          >
+                            {region.review_status === "pending"
+                              ? "machine suggestion · unverified"
+                              : "human reviewed"}
+                          </span>
+                        </span>
                       </span>
                       <Badge tone={region.review_status === "confirmed" ? "success" : "neutral"}>
                         {region.review_status}
@@ -650,6 +870,54 @@ export function DocumentDetailPage() {
           </Card>
         </div>
       </div>
+
+      {/* --- Delete confirmation (accessible modal, consequential action) --- */}
+      <Modal
+        open={deleteOpen}
+        onClose={() => {
+          if (!deleting) setDeleteOpen(false);
+        }}
+        title="Delete this document?"
+        description="This permanently removes the stored file and everything derived from it. It cannot be undone."
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDeleteOpen(false)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={confirmDeletion}
+              loading={deleting}
+              icon={<Trash2 />}
+            >
+              Delete document
+            </Button>
+          </>
+        }
+      >
+        <div className="stack gap-3 text-sm">
+          <p>
+            <strong>{document.original_filename || "Untitled document"}</strong>
+            {` · ${document.page_count} page${document.page_count === 1 ? "" : "s"} · uploaded ${new Date(document.created_at).toLocaleString()}`}
+          </p>
+          <ul className="stack gap-1" style={{ paddingLeft: "1.1rem" }}>
+            <li>The uploaded file and its stored page images.</li>
+            <li>Recognized regions, segments, and their derived results.</li>
+            <li>Any pending or running processing jobs for this document.</li>
+          </ul>
+          <p className="text-xs text-muted">
+            Deletion is asynchronous: the server marks it pending first, purges storage and
+            derived rows, and confirms only when it stops serving the document. An audit record
+            (without file contents) is kept. Review work recorded on segments is removed with the
+            document.
+          </p>
+          {deleteError && (
+            <Alert tone="danger" title="Deletion failed">
+              {deleteError}
+            </Alert>
+          )}
+        </div>
+      </Modal>
     </>
   );
 }
