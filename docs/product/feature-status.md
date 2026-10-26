@@ -205,9 +205,9 @@ remain genuinely independent axes.
 
 | # | Gap | Priority | Evidence |
 | --- | --- | --- | --- |
-| G-A | **Document deletion is entirely unimplemented.** No `DELETE` route, no service function, no job handler ever sets `deletion_pending`/`deleted`, and `ObjectStore.delete()` has no production caller. The lifecycle states and skip-guards exist and are correct, but nothing can reach them. | P1 | `api/v1/documents.py` (9 routes, none delete); `git grep` at HEAD shows only `orgs.py` has a DELETE route; `store.delete` called only from tests |
-| G-B | **OCR cannot be triggered through the application.** `ingestion.enqueue_ocr` is correct and well tested but has zero production callers — no route, no job chain, no script. Through the real API a document preprocesses and then stops; `POST /segment` returns 409 for want of regions. | P1 | `ingestion.py:233`; grep shows callers only in `test_documents_ocr_pipeline.py` |
-| G-C | `enqueue_processing` and `enqueue_ocr` use a fixed document-scoped idempotency key, so once their job succeeds a re-enqueue returns the finished job and schedules nothing. Only `enqueue_segmentation` is run-suffixed and supports explicit reprocessing. Latent today (neither is reachable twice). | P2 | `ingestion.py:226`, `:274` vs `:344`; `jobs.enqueue` returns the existing job regardless of status |
+| G-A | ~~Document deletion unimplemented.~~ **Resolved.** `DELETE /documents/{id}` schedules an idempotent, one-way purge (`enqueue_deletion` → `document.purge` handler → `DocumentPurgePipeline`): storage objects are removed before their rows, the `deleted` tombstone is written only while the worker still holds its lease, reads of a purged document return 404, and the list endpoint excludes tombstones. Covered by `test_documents_ocr_trigger_and_deletion.py` (19 tests). | P1 (resolved) | `api/v1/documents.py` (`delete_document`); `services/documents/purge.py`; `workers/handlers.py` (`handle_document_purge`) |
+| G-B | ~~OCR cannot be triggered through the application.~~ **Resolved.** `POST /documents/{id}/ocr` calls `ingestion.enqueue_ocr`: owner-scoped, eligibility-checked (409 before preprocessing), audited, run-suffixed so re-running after failure schedules fresh work, idempotent while a run is in flight. Covered by `test_documents_ocr_trigger_and_deletion.py`. | P1 (resolved) | `api/v1/documents.py` (`request_ocr`) |
+| G-C | `enqueue_processing` still uses a fixed document-scoped idempotency key (`ingestion.py:238`), so once its job succeeds a re-enqueue returns the finished job and schedules nothing. `enqueue_ocr`, `enqueue_deletion` and `enqueue_segmentation` are all run-suffixed and support explicit reprocessing. Latent for preprocessing (nothing re-enqueues it twice today). | P2 | `ingestion.py:238` vs `:358`, `:415`, `:485`; `jobs.enqueue` returns the existing job regardless of status |
 | G-D | `claim_next` uses `.with_for_update()`, which is a no-op on SQLite — concurrent SQLite workers could double-claim. Correct on PostgreSQL, which is unvalidated. | P2 | `services/jobs.py:93` |
 
 ### Cross-tenant defects fixed in this checkpoint
@@ -222,6 +222,52 @@ closed afterwards; regression tests now guard them permanently in
 | `GET /api/v1/questions/{id}` had **no object-level authorization** — a bare `session.get` returned another tenant's question *including `reference_answer`*, the grading key. `/questions/{id}/rubrics` (GET+POST) and `POST /assessments` shared the gap | User B read user A's answer key with status 200 | Questions resolve through their topic via a single shared `graph_service.authorize_topic_access`; a non-owner now gets 403/404 and never sees the key |
 
 **How to run:** `python -m pytest backend/tests/test_documents_workflow_e2e.py backend/tests/test_cross_tenant_authorization.py -q`
+
+## 5f. Document workflow UI (Phase C)
+
+**Scope in one line:** the recognition and deletion workflows are reachable and
+*accurate* from the SPA — every state the UI shows is derived from server
+responses, and success is only ever claimed on evidence from the server.
+
+| Behaviour | Status | Evidence |
+| --- | --- | --- |
+| `POST /documents/{id}/ocr` driven from the document detail page | ✅ | live browser run: button → `202` + "Recognition requested" toast; `api.ts` `requestOcr()` |
+| No duplicate submission while a job is in flight (UI guard + server idempotency) | ✅ | guard in `startOcr()`; server returns the active job instead of scheduling a second |
+| Honest pending / conflict / failure states | ✅ | 202 → pending; 409 → server's bounded conflict message; 404 → "no longer exists"; network error → explicitly retryable |
+| Failure attributed to the right stage | ✅ | `ocrStageFailed()` — the bounded `DocumentErrorCategory` decides: `ocr_*` means preparation succeeded and recognition failed; shared by the timeline and the
+  failure notice so the two never disagree |
+| "Retry recognition" offered only when retrying can help | ✅ | hidden when preparation failed (the API would accept 202 and fail again permanently); copy states what a retry will and will not do |
+| `DELETE /documents/{id}` behind an accessible confirm modal | ✅ | `role="dialog"`, `aria-modal`, `aria-labelledby`, focus moved into the dialog; cancel disabled while the request is in flight |
+| Deletion success reported only once reads return 404 | ✅ | live run: `DELETE → 202` → "Deletion in progress" alert → polls `404` → "Document deleted" toast → navigate to `/documents`; the 202 alone never claims success |
+| Provenance chips (`.prov`) on regions and segments | ✅ | live run: 3 × `machine suggestion · unverified` on regions, 2 × `inferred structure` + `observed page region` in the segment workspace |
+| Real provider label shown per region | ✅ | regions render their actual `provider`/`model_id` (e.g. `fake/fake://fixture`) — a test double is never presented as TrOCR |
+
+**Live verification performed in this checkpoint** (dev backend + worker, SQLite):
+
+- Recognition on a `preprocessed` document: `POST …/ocr → 202`, job completes,
+  `GET …/regions` returns 3 regions with `provider: fake`, and the detail page
+  renders them with provenance chips and an all-complete timeline.
+- Segmentation: `POST …/segment → 202`, status `completed`, 2 segments, both
+  `pending_review`; chips visible on the detail page and in the segment
+  workspace.
+- Deletion on a throwaway document (twice, to cover both paths): modal →
+  confirm → single `DELETE → 202` (no duplicate request) → poll `404` → success
+  toast → navigation. Console showed only the expected 404 poll responses, no
+  JavaScript errors.
+- Server side after purge: tombstone rows (`processing_state='deleted'`,
+  `storage_key NULL`), audit events `document.delete_requested` and
+  `document.purged`, zero remaining page/segment/region rows, and **zero files**
+  left under `storage/documents/<id>/`.
+- Conflict/containment matrix exercised over HTTP: OCR on a `completed` document
+  → `409 conflict` (bounded message); `DELETE`, `POST …/ocr` and
+  `POST …/segment` on a purged document → `404`; another tenant's document →
+  `404`.
+
+**Stated limits:** recognition here was exercised with the sanctioned `fake`
+test double (refused in production), because TrOCR weights are unobtainable in
+this environment — see `README.md` known limitations. There is no frontend test
+suite; these paths are covered by type-checking, production build, backend tests
+for the API contract, and the manual end-to-end runs above.
 
 ## 6. Assessment & grading (RubricLens)
 
@@ -267,7 +313,8 @@ closed afterwards; regression tests now guard them permanently in
 | Structured JSON logging + correlation IDs | ✅ | `logging.py` |
 | Audit events with redaction | ✅ | `services/audit.py` |
 | Alembic migrations (5 chained revisions, single head, 33 tables) | ✅ | verified vs SQLite via `scripts/verify_migration.py`; upgrade → downgrade → re-upgrade all clean |
-| CI: lint (flake8), import order (isort), types (mypy), migration verify, tests | ✅ | `.github/workflows/ci.yml` |
+| CI: lint (flake8), import order (isort), types (mypy), migration verify, tests, `pip-audit` (informational) | ✅ | `.github/workflows/ci.yml`, job `checks` |
+| CI: frontend typecheck, production build, `npm audit` prod gate + full audit (informational) | ✅ | `.github/workflows/ci.yml`, job `frontend` |
 | PostgreSQL support | ⚠️ untested here | ORM is dialect-agnostic; only SQLite exercised in this environment |
 
 ---
@@ -310,9 +357,10 @@ closed afterwards; regression tests now guard them permanently in
   a clear, permanent `pdf_renderer_unavailable` error rather than a wrong result.
 - **Frontend.** A React SPA now covers the primary screens (see `frontend/`),
   but it has **no test suite** — it is type-checked and built only.
-- **CI security scanning (SAST / dependency scanning).** A CI pipeline runs
-  lint/type/test/migration checks, but no SAST or dependency-vulnerability
-  scanning is configured.
+- **CI security scanning (SAST).** CI runs lint/type/test/migration checks plus
+  dependency-vulnerability scanning (a gating `npm audit --omit=dev
+  --audit-level=high`, an informational full `npm audit`, and an informational
+  `pip-audit`), but **no SAST, secret scanning, or fuzzing** is configured.
 - **Hardened code sandbox.** The sandbox is a subprocess baseline with time and
   import controls. It is **not** reviewed as a multi-tenant isolation boundary.
 - **Calibrated mastery.** BKT parameters are fixed defaults, explicitly marked

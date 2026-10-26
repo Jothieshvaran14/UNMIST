@@ -188,15 +188,15 @@ Implemented in `services/knowledge/retrieval.py`, tested in
   provides. TLS in transit is expected to be terminated at the proxy/load
   balancer. Not implemented in-app.
 - **No PII export/erasure (GDPR) endpoints.** Not implemented.
-- **No document deletion or retention enforcement at all.** Confirmed by the
-  Checkpoint F audit: there is no `DELETE` route, no service function and no job
-  handler that ever reaches `deletion_pending`/`deleted`, and
-  `ObjectStore.delete()` has no production caller. `Org.data_retention_days` is
-  a stored column nothing reads. The skip-guards that would stop a stale worker
-  resurrecting a deleting document are implemented and tested, but they are
-  unreachable — the entry point that would set those states does not exist.
-  Private storage therefore has no erasure story, and originals are written but
-  never removed.
+- **Document deletion exists but is immediate — there is no retention
+  schedule.** `DELETE /documents/{id}` now drives an idempotent purge
+  (`document.purge` handler): the document's own storage objects are removed
+  before its derived rows, then a `deleted` tombstone is written under a lease
+  check; reads of a purged document return 404 and the library list excludes
+  it. Covered by `test_documents_ocr_trigger_and_deletion.py`. Still missing:
+  `Org.data_retention_days` is a stored column nothing reads, so there is no
+  *scheduled* retention enforcement, and no PII export/erasure endpoint (see
+  above). Erasure on PostgreSQL is unvalidated.
 
 ## Code sandbox
 
@@ -217,9 +217,16 @@ Implemented in `services/learning/sandbox.py`:
 
 ## Dependency & supply-chain posture
 
-- Dependencies are **pinned** in `requirements.txt`.
-- No lockfile/hash-pinning or automated dependency scanning is configured. Not
-  implemented here.
+- Backend dependencies are **pinned** in `requirements.txt`; frontend
+  dependencies are pinned by `package-lock.json`, which CI installs from with
+  `npm ci`.
+- **CI dependency scanning is configured:** the frontend job *gates* on
+  `npm audit --omit=dev --audit-level=high` and reports a full `npm audit`
+  informationally; the backend job reports `pip-audit` informationally
+  (`continue-on-error`) because the requirements are pinned without hashes.
+- **No hash-pinning** (`--require-hashes` / lockfile integrity for the Python
+  tree), **no SAST**, and **no secret scanning** are configured. Not implemented
+  here.
 
 ## Known gaps (explicitly not implemented)
 
@@ -233,7 +240,7 @@ Implemented in `services/learning/sandbox.py`:
 | DNS rebinding not fully pinned | SSRF via rebind | Pin resolved IP per connection |
 | No encryption at rest | Data exposure on disk leak | Rely on disk/volume encryption |
 | No GDPR export/erasure | Compliance | Add subject-access/erasure endpoints |
-| No CI security scanning | Regressions ship unnoticed | Add SAST + dependency scanning |
+| No SAST / secret scanning in CI (dependency audits only) | Vulnerable or leaked code ships unnoticed | Add SAST + secret scanning; keep the `npm audit` gate |
 
 ## Reporting
 

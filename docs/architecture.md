@@ -280,13 +280,15 @@ Traced end to end, the document pipeline is **not** a closed loop:
 | --- | --- |
 | Upload → validation → private storage → row + `document.process` | API (`POST /documents/uploads`) |
 | Preprocessing | `document.process` handler, auto-enqueued |
-| **OCR** | **service function only — no route, job chain or script calls `enqueue_ocr`** |
+| **OCR** | API (`POST /documents/{id}/ocr`) + `document.ocr` handler |
 | Segmentation scheduling | API (`POST /documents/{id}/segment`) |
 | Segmentation → retrieval → review | API + `document.segment` handler |
-| **Deletion / cleanup** | **not implemented** — nothing ever reaches `deletion_pending`/`deleted`, and `ObjectStore.delete()` has no production caller |
+| **Deletion / cleanup** | API (`DELETE /documents/{id}`) + `document.purge` handler — moves to `deletion_pending`, purges this document's storage objects (before their rows, so a retry still finds the keys), then writes the `deleted` tombstone |
 
 The state machine and every skip-guard for deletion are implemented and tested;
-what is missing is the entry point that would set those states.
+the entry points are `POST /documents/{id}/ocr` and `DELETE /documents/{id}`,
+both owner-scoped and audited (`document.ocr_requested`,
+`document.delete_requested`, `document.purged`).
 
 ## Persistence & dialects
 

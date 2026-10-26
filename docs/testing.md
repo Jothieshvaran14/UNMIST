@@ -37,8 +37,9 @@ test suite; real-model scoring is refused unless `--dataset-license` is given.
 
 ## Current state
 
-Last verified full run: **262 passed, 1 skipped** (the opt-in real-model OCR
-smoke test) on Python 3.10 / SQLite.
+Last verified full run: **281 passed, 1 skipped** (the opt-in real-model OCR
+smoke test) on Python 3.10 / SQLite — reproduced both locally and in a Linux
+container emulating the CI steps.
 
 Test categories, reported separately:
 
@@ -72,6 +73,7 @@ Test categories, reported separately:
 | `test_documents_ocr_providers.py` | OCR contract, none/fake providers, normalization, bbox validation, coordinate mapping, line extraction, provider selection + production guard, CER/WER metrics |
 | `test_documents_ocr_pipeline.py` | `document.ocr` end-to-end: persisted regions, idempotent redelivery, reviewer-correction preservation, provider-unavailable, lease expiry, stale-worker, cancellation, deletion, `/regions` endpoint authorization + tenant isolation |
 | `test_documents_ocr_smoke.py` | Opt-in real TrOCR inference (skipped in ordinary CI) |
+| `test_documents_ocr_trigger_and_deletion.py` | `POST /documents/{id}/ocr` (eligibility, 409 before preprocessing, idempotent re-trigger, audit, tenant isolation) and `DELETE /documents/{id}` (202 → purge → tombstone, storage objects removed before rows, owner-scoped 404, full dispatch through the registered `document.purge` handler) |
 | `test_documents_segmentation.py` | Checkpoint E: 22 enumerated scenarios — pure segmenter (S01–S15), durable `document.segment` job (S16–S21), API auth/validation/audit (S22) |
 | `test_documents_workflow_e2e.py` | Checkpoint F: the whole document workflow in one continuous scenario over the live stack (upload → preprocess → OCR → segments → review → reprocess → redelivery), plus end-to-end tenant isolation and org scoping |
 | `test_cross_tenant_authorization.py` | Checkpoint F: regression tests for two verified P0 cross-tenant defects (topic listing leak; question/answer-key object authorization) — 9 scenarios |
@@ -87,10 +89,10 @@ handlers.
 Two boundaries are honest and deliberate, and are recorded rather than papered
 over:
 
-- **OCR has no API trigger.** `ingestion.enqueue_ocr` is correct and tested but
-  has no production caller, so the test calls that service function directly —
-  exactly as the Checkpoint D tests do. The upload → preprocess → OCR hop is
-  therefore verified at the *service* boundary, not over HTTP.
+- **OCR now has an API trigger.** `POST /api/v1/documents/{id}/ocr` schedules
+  recognition (202, owner-scoped, audited), and the end-to-end suite exercises
+  upload → preprocess → OCR through that route. The Checkpoint D service-level
+  tests still call `ingestion.enqueue_ocr` directly for pipeline detail.
 - **The OCR text is fixture-derived, not recognized.** The genuine `fake`
   provider still runs the real line extractor and the real coordinate mapper, so
   geometry, provenance and persistence are genuinely exercised. Nothing in this
@@ -199,24 +201,32 @@ constraint inspection above, and the full suite against it.
   been run through the segmenter.
 - **PostgreSQL is unvalidated** for the segmentation tables specifically (as for
   every other table here); the migration and schema checks are SQLite-only.
-- **No security scanning** (SAST/dependency) — the CI pipeline runs
-  lint/type/test/migration checks only (`.github/workflows/ci.yml`).
+- **Dependency audits run in CI; SAST does not.** The frontend job gates on
+  `npm audit --omit=dev --audit-level=high` (plus an informational full audit)
+  and the backend job reports `pip-audit` informationally — see
+  [Continuous integration](#continuous-integration). There is no SAST, no
+  secret scanning, and no fuzzing in CI.
 - **No frontend tests** — the React SPA in `frontend/` has no unit or
-  end-to-end suite; it is type-checked (`npm run typecheck`) and built
-  (`npm run build`) only.
+  end-to-end suite; it is type-checked (`npm run typecheck`), built
+  (`npm run build`), and dependency-audited in CI, and its error paths were
+  verified by manual end-to-end runs against a live backend.
 - **Sandbox escape testing.** The sandbox is a baseline subprocess; its
   resistance to a determined escape has not been adversarially tested. See
   [`security.md`](security.md).
-- **Deletion and cleanup are unverified end to end because they do not exist.**
-  The Checkpoint F audit confirmed no production code path ever reaches
-  `deletion_pending`/`deleted` and `ObjectStore.delete()` has no production
-  caller. The pipeline *skip-guards* for those states are tested (the tests set
-  the state directly), but no user-visible deletion workflow is exercised —
-  because there is none to exercise.
-- **The upload → preprocess → OCR transition is not exercised over HTTP.**
-  `ingestion.enqueue_ocr` has no production caller, so the end-to-end test
-  reaches OCR at the service boundary. Whether an HTTP trigger would behave
-  identically is unverified.
+- **Deletion is covered over HTTP and through the real queue.**
+  `test_documents_ocr_trigger_and_deletion.py` (19 tests) exercises
+  `DELETE /documents/{id}` (202, idempotent while pending, owner-scoped 404,
+  audited), `POST /documents/{id}/ocr` (202 on eligibility, 409 before
+  preprocessing, the active job returned instead of a second schedule, owner
+  scope, audit), the purge pipeline (storage objects removed before rows,
+  tombstone, retry-safety, refusal for non-pending documents, lost-lease stop,
+  tenant isolation), a delete that races in-flight preprocessing/OCR/
+  segmentation jobs, and one full dispatch through `job_service.run_once` with
+  the registered `document.purge` handler. Purge behaviour on **PostgreSQL** is
+  still unvalidated, as everything else database-related in this suite.
+- **The upload → preprocess → OCR transition is exercised over HTTP** in
+  `test_documents_workflow_e2e.py`, which posts to the real OCR trigger and
+  then runs the registered handler.
 - **No authorization tests existed for the topics/learning surface before this
   checkpoint.** Two P0 cross-tenant defects were found and fixed
   (`test_cross_tenant_authorization.py`), but coverage there is still narrow —
@@ -227,16 +237,32 @@ constraint inspection above, and the full suite against it.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on pushes to `main` and on pull requests:
+`.github/workflows/ci.yml` runs on pushes to `main` and on pull requests, as two
+jobs:
+
+**`checks` (Python 3.10)**
 
 1. **flake8** — style/lint.
 2. **isort** — import order (check-only).
 3. **mypy** — static types.
 4. **alembic upgrade head** + `scripts/verify_migration.py` — migration applies
    and matches the ORM metadata.
-5. **pytest** — the full test suite, against SQLite (no external services).
+5. **pytest** — the full test suite, against SQLite (no external services). CI
+   installs the documented `pdf` extra so the preprocessing tests keep their
+   real `pypdfium2` rasterization coverage.
+6. **pip-audit** — informational only (`continue-on-error: true`).
 
-CI does **not** currently include SAST or dependency-vulnerability scanning.
+**`frontend` (Node 20)**
+
+1. `npm ci`.
+2. `npm run typecheck` — TypeScript, gating.
+3. `npm run build` — production build, gating.
+4. `npm audit --omit=dev --audit-level=high` — **gating** production dependency
+   audit.
+5. `npm audit` (full, including dev tooling) — informational only.
+
+CI includes **dependency-vulnerability scanning** as described above; it does
+**not** include SAST, secret scanning, or fuzzing.
 
 ## Adding tests
 

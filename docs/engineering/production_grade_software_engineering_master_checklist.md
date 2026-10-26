@@ -1138,3 +1138,77 @@ The real objective is not to implement every technology on this list. It
 is to ensure that every relevant failure mode has an appropriate
 control, that the control works under realistic conditions, and that
 somebody can detect and respond when it fails.
+
+## 29. Unmist: status against this checklist
+
+Appendix added by the project. Only items with **executed evidence** are
+marked done; everything else stays unchecked on purpose. The boxes above
+are the generic target, not a claim about this repository.
+
+### Done, with evidence
+
+-   [x] **§2 Strict type checking** — `mypy backend/app` (93 files, 0
+    issues) and `tsc -b` over `frontend/`, both gating in CI.
+-   [x] **§2 Linting and automated formatting** — `flake8` (0 findings)
+    and `isort --check-only` (0 findings) in the CI `checks` job.
+-   [x] **§2 Environment-variable validation at startup** —
+    `app.config` validates settings and refuses placeholder secrets and
+    test doubles (e.g. the `fake` OCR provider) when `ENVIRONMENT=production`.
+-   [x] **§2 Dependency pinning** — exact pins in `requirements.txt`;
+    `package-lock.json` committed and installed with `npm ci`.
+-   [x] **§3 Automated CI on every push/PR** — `.github/workflows/ci.yml`:
+    `checks` (lint, isort, mypy, migrations + `scripts/verify_migration.py`,
+    full pytest, informational `pip-audit`) and `frontend` (typecheck,
+    production build, **gating** `npm audit --omit=dev --audit-level=high`,
+    informational full audit). Verified green on GitHub Actions run
+    `40266724672` (both jobs, every step).
+-   [x] **§3 Database migration validation** — `alembic upgrade head` then
+    `scripts/verify_migration.py` (33 tables: migration schema == ORM
+    metadata), in CI and locally; upgrade → downgrade → re-upgrade clean.
+-   [x] **§16 Unit and integration tests** — 281 passed, 1 skipped on
+    Python 3.10 / SQLite, reproduced locally and in a Linux container
+    emulating CI.
+-   [x] **§16 Authorization and tenant-isolation tests** —
+    `test_cross_tenant_authorization.py` plus owner-scoping assertions
+    across the document, topic, question and portfolio suites.
+-   [x] **§16 Database migration and rollback-compatibility tests** —
+    migration verification plus upgrade/downgrade/re-upgrade exercise.
+-   [x] **§16 Concurrent-write and race-condition tests** — queue
+    claim/lease tests, stale-worker finalization, and the delete-vs-
+    in-flight-processing race test
+    (`test_delete_races_pending_preprocessing_ocr_and_segmentation_jobs`).
+-   [x] **§16 Dependency failure tests** — provider-unavailable
+    (`ocr_unavailable`), storage failure, and bounded-retry/permanent-error
+    classification tests; the app fails loud rather than degrading
+    silently.
+
+### Partially done (stated limits)
+
+-   [~] **§3 Security and license policy checks** — dependency audits run
+    (production `npm audit` gates; `pip-audit` informational). **No SAST,
+    no secret scanning, no license-policy gate.**
+-   [~] **§16 End-to-end tests for critical user journeys** — the backend
+    journey is automated (`test_documents_workflow_e2e.py`); the SPA has
+    **no automated E2E suite** and its error paths were verified by manual
+    browser runs against a live backend.
+-   [~] **§19 Frontend production quality** — typecheck, production build
+    and dependency audit in CI; no unit tests, no automated accessibility
+    or cross-browser suite (manual accessibility-tree checks only).
+-   [~] **§9 Authentication** — Argon2id, short-lived access tokens,
+    hashed refresh tokens with rotation/reuse detection; **no MFA, no
+    password reset, no lockout, no application-layer rate limiting.**
+
+### Open (no evidence, therefore not marked)
+
+-   [ ] **§3 Branch protection / code review** — `main` has **no branch
+    protection and no required status checks** (verified on the
+    repository); pushes land directly.
+-   [ ] **§17 Backups, restore, RPO/RTO** — backup/restore is not
+    implemented; recovery has never been exercised.
+-   [ ] **§4/§16 Load, stress, soak, capacity testing** — none performed;
+    no latency or throughput has been measured.
+-   [ ] **§6 PostgreSQL validation** — only SQLite has ever been run.
+-   [ ] **§15 Observability beyond structured logs** — JSON logs with
+    correlation IDs exist; no metrics, tracing, or alerting.
+-   [ ] **§14 Supply-chain hardening** — no SBOM, image signing, or
+    `--require-hashes` pinning for the Python tree.

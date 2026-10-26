@@ -59,8 +59,9 @@ several items there are load-bearing, not decoration.
 | Code sandbox | ⚠️ baseline | Subprocess isolation; **not** a hardened multi-tenant sandbox |
 | PostgreSQL | ⚠️ untested here | ORM is dialect-agnostic; only SQLite exercised in this environment |
 | LLM integration | ❌ not configured | `LLM_PROVIDER=none` default; boundary fails loud by design |
-| Document deletion | ❌ not implemented | No delete route exists |
-| CI security scanning | ❌ not configured | Lint/type/test/migration only — no SAST or dependency scanning |
+| Document deletion | ✅ working | `DELETE /documents/{id}` → purge job → tombstone + audit; UI confirm modal reports success only on 404 |
+| Document OCR trigger (UI) | ✅ working | `POST /documents/{id}/ocr` wired to the detail page; eligibility/conflict/pending states mirror the API |
+| CI security scanning | ⚠️ partial | Dependency audits run in CI (`npm audit` prod gate, informational `pip-audit`); **no SAST** |
 
 Per-feature detail with test evidence: [`docs/product/feature-status.md`](docs/product/feature-status.md).
 
@@ -185,7 +186,8 @@ All routes are mounted under `/api/v1`. Interactive OpenAPI docs are served at
 `GET|POST /me/portfolio/items`, `GET /portfolios/{public_id}`
 
 **Documents** — `POST /documents/uploads`, `GET /documents`,
-`GET /documents/{id}`, `GET /documents/{id}/processing`,
+`GET /documents/{id}`, `DELETE /documents/{id}`,
+`GET /documents/{id}/processing`, `POST /documents/{id}/ocr`,
 `GET /documents/{id}/regions`, `POST /documents/{id}/segment`,
 `GET /documents/{id}/segmentation`, `GET /documents/{id}/segments`,
 `POST /documents/{id}/segments/{sid}/review`
@@ -195,17 +197,23 @@ All routes are mounted under `/api/v1`. Interactive OpenAPI docs are served at
 ### Document lifecycle (actual behaviour)
 
 ```
-upload ──> queued ──> preprocessed ──> [OCR] ──> segmentation
-              │            │              │            │
-              └─ worker    └─ page images └─ NOT REACHABLE THROUGH THE API
-                             only            (see limitation G-B)
+upload ──> queued ──> preprocessed ──> ocr_processing ──> segmentation
+              │            │                 │                 │
+              └ worker     └ page images     └ POST /ocr       └ POST /segment
+                                            (recognized content, not verified truth)
+
+DELETE /documents/{id} ──> deletion_pending ──> document.purge job ──> deleted
+                            (pipelines skip)    (storage + rows purged,   (tombstone:
+                                                 lease-checked)            reads 404)
 ```
 
 Upload enqueues `document.process`; the worker validates, stores privately, and
-preprocesses to page images. **OCR is not reachable through the application** —
-`POST /documents/{id}/ocr` does not exist, so a document stops at
-`preprocessed` and segmentation returns `409` for want of regions. This is a
-known gap, not a working path.
+preprocesses to page images. `POST /documents/{id}/ocr` schedules recognition
+(eligibility-checked: 409 before preprocessing; audited; idempotent while a run
+is in flight), and `POST /documents/{id}/segment` schedules segmentation on its
+own status axis. `DELETE /documents/{id}` begins a one-way, asynchronous purge:
+the document's private storage objects and derived rows are destroyed by the
+`document.purge` job, and only then does it become `deleted`.
 
 ---
 
@@ -391,19 +399,30 @@ $env:PYTHONPATH="backend"
 python -m pytest backend/tests -q
 ```
 
-Last verified run on Python 3.10 / SQLite: **262 passed, 1 skipped** (~100s).
-The single skip is `test_documents_ocr_smoke.py`, an opt-in real-model test
-gated behind `UNMIST_OCR_SMOKE=1` and `OCR_REAL_MODEL_SMOKE_ENABLED=1` —
-ordinary CI never loads a model.
+Last verified run on Python 3.10 / SQLite: **281 passed, 1 skipped** (~115s),
+and the same result on Linux + Python 3.10 inside a container that emulates the
+CI steps end to end. The single skip is `test_documents_ocr_smoke.py`, an
+opt-in real-model test gated behind `UNMIST_OCR_SMOKE=1` and
+`OCR_REAL_MODEL_SMOKE_ENABLED=1` — ordinary CI never loads a model.
 
-CI (`.github/workflows/ci.yml`) runs flake8, isort, mypy, migration
-verification, and pytest on Python 3.10.
+CI (`.github/workflows/ci.yml`) runs two jobs on pushes to `main` and on pull
+requests:
+
+- **`checks` (Python 3.10)** — flake8, isort, mypy, `alembic upgrade head` +
+  `scripts/verify_migration.py`, the full pytest suite (installs the documented
+  `pdf` extra so real PDF rasterization stays covered), and an informational
+  `pip-audit`.
+- **`frontend` (Node 20)** — `npm ci`, `npm run typecheck`, `npm run build`, a
+  **gating** `npm audit --omit=dev --audit-level=high`, and an informational
+  full `npm audit`.
 
 **Known testing gaps:**
 
-- **No frontend tests.** The SPA is type-checked and built, but has no unit or
-  end-to-end test suite.
-- **No SAST, dependency-vulnerability, or fuzz testing** in CI.
+- **No frontend tests.** The SPA is type-checked and built in CI, but has no
+  unit or end-to-end test suite; frontend error handling is verified by
+  type-checking, production build, and manual end-to-end runs only.
+- **No SAST or fuzz testing** in CI — dependency audits are the only
+  security-oriented CI gate.
 - **PostgreSQL is untested** in this environment — only SQLite has been run.
 - **No real-document segmentation accuracy measurement** — no labeled benchmark
   exists.
@@ -451,7 +470,11 @@ See [`docs/security.md`](docs/security.md) for the threat model and full detail.
   return-to URLs from query parameters, so neither is reachable through current
   code paths — but the fix requires a major upgrade to react-router 7 and has
   **not** been applied or validated.
-- No SAST or dependency scanning runs in CI.
+- **Dependency scanning runs in CI; SAST does not.** The frontend job gates on
+  `npm audit --omit=dev --audit-level=high` and reports a full `npm audit`
+  informationally; the backend job reports `pip-audit` informationally (it
+  cannot gate on pinned, hash-verified requirements without false positives).
+  There is no SAST, no secret scanning, and no fuzzing in CI.
 
 ---
 
@@ -459,25 +482,32 @@ See [`docs/security.md`](docs/security.md) for the threat model and full detail.
 
 These are real and deliberately visible:
 
-1. **OCR cannot be triggered through the application.** `POST
-   /documents/{id}/ocr` does not exist, so documents stop at `preprocessed`.
-2. **Document deletion is unimplemented** — no `DELETE /documents/{id}` route.
-3. **No question-catalogue listing endpoint**, so the UI offers no "start
+1. **Document deletion has no retention schedule.** `DELETE /documents/{id}`
+   purges a document immediately (storage + derived rows + tombstone);
+   `Org.data_retention_days` is stored but not enforced.
+2. **No question-catalogue listing endpoint**, so the UI offers no "start
    assessment" action.
-4. **Retention schedules cannot be mutated** via the API.
-5. **Graph nodes/edges are not exposed** — only concept and relationship
+3. **Retention schedules cannot be mutated** via the API.
+4. **Graph nodes/edges are not exposed** — only concept and relationship
    *counts*, so the Knowledge Map draws no graph.
-6. **No account rename, delete, or data export.**
-7. **No server-side document search** — filtering runs over loaded records.
-8. **TrOCR inference is unverified** — weights were not obtainable in this
+5. **No account rename, delete, or data export.**
+6. **No server-side document search** — filtering runs over loaded records.
+7. **TrOCR inference is unverified** — weights were not obtainable in this
    environment; no OCR output has been produced or reviewed.
-9. **Training-data terms for TrOCR's IAM fine-tuning corpus were not
+8. **Training-data terms for TrOCR's IAM fine-tuning corpus were not
    re-verified** (host unreachable). Confirm them before any commercial use.
-10. **Mastery (BKT) is uncalibrated**, marked `provisional-v1`.
-11. **Segmentation accuracy on real documents is unestablished** — heuristic
+9. **Mastery (BKT) is uncalibrated**, marked `provisional-v1`.
+10. **Segmentation accuracy on real documents is unestablished** — heuristic
     rules, no labeled benchmark.
-12. **PostgreSQL unvalidated**; **backup/restore not implemented**.
-13. **No frontend test suite.**
+11. **PostgreSQL unvalidated**; **backup/restore not implemented**.
+12. **No frontend test suite.**
+13. **Live recognition in this environment was exercised with the sanctioned
+    `fake` test double** (refused in production). The UI shows each region's
+    real provider/model label — e.g. `fake/fake://fixture` — so a test double is
+    never presented as TrOCR, and TrOCR itself remains unverified (item 7).
+14. **Purge removes every stored object but leaves the empty per-document
+    directory shell** on disk (`storage/documents/<id>/` contains no files
+    afterwards). No content, storage key, or path is exposed by the API.
 
 ---
 
