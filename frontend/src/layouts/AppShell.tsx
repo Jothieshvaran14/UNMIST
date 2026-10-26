@@ -15,8 +15,10 @@ import {
   ClipboardCheck,
   FileStack,
   Gauge,
+  IdCard,
   LogOut,
   Menu,
+  Route,
   Settings2,
   X,
 } from "lucide-react";
@@ -37,9 +39,11 @@ interface NavEntry {
 const NAV: NavEntry[] = [
   { to: "/", label: "Overview", icon: <Gauge />, end: true, group: "Workspace" },
   { to: "/documents", label: "Documents", icon: <FileStack />, group: "Workspace" },
-  { to: "/knowledge", label: "Knowledge Map", icon: <BrainCircuit />, group: "Workspace" },
+  { to: "/knowledge", label: "Knowledge", icon: <BrainCircuit />, group: "Workspace" },
+  { to: "/learntrace", label: "LearnTrace", icon: <Route />, group: "Learning" },
   { to: "/assessments", label: "Assessments", icon: <ClipboardCheck />, group: "Learning" },
   { to: "/retention", label: "Retention", icon: <BookOpenCheck />, group: "Learning" },
+  { to: "/portfolio", label: "Portfolio", icon: <IdCard />, group: "Identity" },
   { to: "/settings", label: "Settings", icon: <Settings2 />, group: "Account" },
 ];
 
@@ -48,9 +52,11 @@ const ROUTE_TITLES: Array<{ match: RegExp; title: string }> = [
   { match: /^\/documents$/, title: "Documents" },
   { match: /^\/documents\/[^/]+\/segments$/, title: "Segment review" },
   { match: /^\/documents\/[^/]+$/, title: "Document detail" },
-  { match: /^\/knowledge$/, title: "Knowledge Map" },
+  { match: /^\/knowledge$/, title: "Knowledge" },
+  { match: /^\/learntrace$/, title: "LearnTrace" },
   { match: /^\/assessments$/, title: "Assessments" },
   { match: /^\/retention$/, title: "Retention" },
+  { match: /^\/portfolio$/, title: "Portfolio" },
   { match: /^\/settings$/, title: "Settings" },
 ];
 
@@ -120,12 +126,27 @@ export function AppShell() {
       >
         <div className="brand">
           <span className="brand__mark" aria-hidden="true">
-            <BookOpenCheck />
+            {/* Trace mark: three linked nodes — knowledge with provenance. */}
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="12" cy="5.5" r="2.5" />
+              <circle cx="5.5" cy="18" r="2.5" />
+              <circle cx="18.5" cy="18" r="2.5" />
+              <path d="M7.6 16.2 10.4 7.9" />
+              <path d="M16.4 16.2 13.6 7.9" />
+              <path d="M8 18h8" />
+            </svg>
           </span>
           <span>
             <span className="brand__name">Unmist</span>
             <br />
-            <span className="brand__tag">Evidence · Learning</span>
+            <span className="brand__tag">Traceable knowledge</span>
           </span>
           <button
             className="btn btn--ghost btn--sm btn--icon menu-toggle"

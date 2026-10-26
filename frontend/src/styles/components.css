@@ -510,7 +510,7 @@
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(11, 16, 32, 0.55);
+  background: rgba(19, 20, 22, 0.55);
   z-index: var(--z-modal);
   display: flex;
   align-items: center;
@@ -698,7 +698,7 @@
 
 .progress__bar {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent-500), var(--accent-700));
+  background: var(--accent);
   border-radius: var(--radius-pill);
   transition: width var(--dur-base) var(--ease);
 }
@@ -763,4 +763,75 @@
   background: var(--neutral-soft);
   border-radius: var(--radius-pill);
   color: var(--text-muted);
+}
+
+/* --- Epistemic provenance chips ---------------------------------------
+   Distinguish observed evidence, algorithmic inference, machine
+   suggestion, and human-reviewed outcomes. Shape carries meaning too:
+   evidence and review are solid, inference is dashed, suggestion is
+   dotted — readable without relying on colour alone.                */
+
+.prov {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.6;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.prov svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.prov--evidence {
+  background: var(--evidence-soft);
+  border-color: var(--evidence-border);
+  color: var(--evidence);
+  border-left-width: 3px;
+}
+
+.prov--inference {
+  background: var(--inference-soft);
+  border-color: var(--inference-border);
+  border-style: dashed;
+  color: var(--inference);
+}
+
+.prov--suggestion {
+  background: var(--suggestion-soft);
+  border-color: var(--suggestion-border);
+  border-style: dotted;
+  color: var(--suggestion);
+}
+
+.prov--reviewed {
+  background: var(--reviewed-soft);
+  border-color: var(--reviewed-border);
+  color: var(--reviewed);
+  border-left-width: 3px;
+}
+
+/* --- Reading voice ----------------------------------------------------
+   Long-form content that mirrors a page of text: OCR transcripts,
+   segment text, portfolio prose. Serif, generous leading, bounded
+   measure — document reading should not look like UI chrome.       */
+
+.reading {
+  font-family: var(--font-reading);
+  font-size: 16px;
+  line-height: var(--leading-relaxed);
+  max-width: var(--prose-max);
+}
+
+.reading--wide {
+  max-width: none;
 }

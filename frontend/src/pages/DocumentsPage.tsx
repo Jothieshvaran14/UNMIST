@@ -74,7 +74,15 @@ export function DocumentsPage() {
   const [uploadOpen, setUploadOpen] = useState(false);
 
   // `?upload=1` opens the uploader directly (used by the Overview shortcut).
+  // `?filter=<key>` preselects a status filter (Overview's next-action links).
   useEffect(() => {
+    const wanted = params.get("filter");
+    if (wanted && FILTERS.some((entry) => entry.key === wanted)) {
+      setFilter(wanted as FilterKey);
+      const next = new URLSearchParams(params);
+      next.delete("filter");
+      setParams(next, { replace: true });
+    }
     if (params.get("upload") === "1") {
       setUploadOpen(true);
       const next = new URLSearchParams(params);

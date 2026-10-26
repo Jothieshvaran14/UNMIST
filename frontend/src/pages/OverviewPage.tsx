@@ -7,11 +7,12 @@
  * entirely rather than filled with a placeholder.
  */
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowRight,
   BrainCircuit,
+  CalendarClock,
   CheckCircle2,
   FileUp,
   FileStack,
@@ -19,6 +20,7 @@ import {
   PenLine,
   RefreshCw,
   ScanText,
+  TriangleAlert,
   Upload,
 } from "lucide-react";
 import { useAuth } from "@/auth/AuthContext";
@@ -91,6 +93,127 @@ export function OverviewPage() {
 
   const failed = items.filter((doc) => doc.processing_state === "failed").length;
 
+  // Due reviews are real server data; they are the one action that is not
+  // about documents at all, so the page asks for the list directly.
+  const dueReviews = useAsyncData((signal) => api.listDueReviews(signal), []);
+
+  /**
+   * Next actions are *derived from recorded state only*: each entry names a
+   * condition the server actually reported. When nothing needs doing the card
+   * says so instead of inventing work.
+   */
+  const actions = useMemo(() => {
+    const total = documents.data?.total ?? 0;
+    const readyForOcr = items.filter((d) => d.processing_state === "preprocessed");
+    const needsReview = items.filter((d) => d.processing_state === "review_required");
+    const failedDocs = items.filter((d) => d.processing_state === "failed");
+    const awaitingSegmentation = items.filter(
+      (d) =>
+        d.processing_state === "completed" &&
+        segmentation.statuses[d.id]?.segmentation_status !== "completed" &&
+        segmentation.statuses[d.id]?.segmentation_status !== "failed",
+    );
+    const due = dueReviews.data?.length ?? 0;
+
+    const list: Array<{
+      key: string;
+      icon: ReactNode;
+      title: string;
+      detail: string;
+      to?: string;
+      cta: string;
+      tone?: "primary" | "secondary";
+    }> = [];
+
+    if (total === 0) {
+      list.push({
+        key: "upload",
+        icon: <Upload />,
+        title: "Upload your first document",
+        detail:
+          "Nothing is stored publicly: the file goes to private storage and only authorized API paths can read it back.",
+        to: "/documents?upload=1",
+        cta: "Upload",
+        tone: "primary",
+      });
+      return list;
+    }
+
+    if (inFlight > 0) {
+      list.push({
+        key: "inflight",
+        icon: <RefreshCw />,
+        title: `${inFlight} document${inFlight === 1 ? " is" : "s are"} processing`,
+        detail:
+          "Preprocessing and recognition run as queued jobs; the stages update themselves on the document page.",
+        to: "/documents?filter=active",
+        cta: "Watch progress",
+      });
+    }
+    if (failedDocs.length > 0) {
+      list.push({
+        key: "failed",
+        icon: <TriangleAlert />,
+        title: `${failedDocs.length} document${failedDocs.length === 1 ? "" : "s"} stopped with an error`,
+        detail: "Failed documents keep their partial results and can be retried or deleted.",
+        to: "/documents?filter=failed",
+        cta: "Review failures",
+        tone: "primary",
+      });
+    }
+    if (needsReview.length > 0) {
+      list.push({
+        key: "review",
+        icon: <PenLine />,
+        title: `${needsReview.length} document${needsReview.length === 1 ? "" : "s"} waiting for human review`,
+        detail: "Recognition finished but flagged output a person should confirm or correct.",
+        to: "/documents?filter=review",
+        cta: "Open the queue",
+        tone: "primary",
+      });
+    }
+    if (readyForOcr.length > 0) {
+      list.push({
+        key: "ocr",
+        icon: <ScanText />,
+        title: `${readyForOcr.length} document${readyForOcr.length === 1 ? "" : "s"} prepared but not yet recognized`,
+        detail:
+          "Page images exist; text recognition has not run. Running it produces observed content, not verified truth.",
+        to: "/documents?filter=processed",
+        cta: "Prepare recognition",
+      });
+    }
+    if (awaitingSegmentation.length > 0) {
+      list.push({
+        key: "segment",
+        icon: <Layers />,
+        title: `${awaitingSegmentation.length} recognized document${awaitingSegmentation.length === 1 ? "" : "s"} without segments`,
+        detail:
+          "Segmentation groups recognized lines into question and answer candidates — inferred structure a reviewer confirms.",
+        to: "/documents?filter=processed",
+        cta: "Review candidates",
+      });
+    }
+    if (due > 0) {
+      list.push({
+        key: "reviews",
+        icon: <CalendarClock />,
+        title: `${due} retention review${due === 1 ? "" : "s"} due`,
+        detail: "Scheduled by the spaced-repetition service from your recorded study history.",
+        to: "/retention",
+        cta: "Open retention",
+      });
+    }
+
+    return list;
+  }, [
+    documents.data?.total,
+    items,
+    inFlight,
+    segmentation.statuses,
+    dueReviews.data,
+  ]);
+
   return (
     <>
       <div className="page-head">
@@ -134,13 +257,13 @@ export function OverviewPage() {
               label="Active now"
               icon={<RefreshCw />}
               value={documents.initialLoading ? "—" : inFlight}
-              note="Preprocessing or OCR in progress"
+              note="Among the 6 most recent"
             />
             <Stat
               label="Needs attention"
               icon={<PenLine />}
               value={documents.initialLoading ? "—" : failed}
-              note="Documents in the failed state"
+              note="Failed, among the 6 most recent"
             />
             <Stat
               label="Segmented"
@@ -216,43 +339,58 @@ export function OverviewPage() {
                 </div>
               </Card>
 
-              <Card title="What you can do next" icon={<CheckCircle2 />}>
-                <ol className="stack gap-3 text-sm">
-                  <li className="row gap-3">
-                    <span className="flow__num" style={{ marginBottom: 0, flex: "none" }}>
-                      1
-                    </span>
-                    <span className="grow">
-                      <strong>Upload</strong> a permitted file (PDF, JPG, JPEG, PNG, TIFF).
-                    </span>
-                  </li>
-                  <li className="row gap-3">
-                    <span className="flow__num" style={{ marginBottom: 0, flex: "none" }}>
-                      2
-                    </span>
-                    <span className="grow">
-                      <strong>Watch the stages</strong> advance on the document detail page.
-                    </span>
-                  </li>
-                  <li className="row gap-3">
-                    <span className="flow__num" style={{ marginBottom: 0, flex: "none" }}>
-                      3
-                    </span>
-                    <span className="grow">
-                      <strong>Segment</strong> recognized regions into question and answer
-                      candidates.
-                    </span>
-                  </li>
-                  <li className="row gap-3">
-                    <span className="flow__num" style={{ marginBottom: 0, flex: "none" }}>
-                      4
-                    </span>
-                    <span className="grow">
-                      <strong>Review</strong> and correct each segment; your correction is
-                      preserved.
-                    </span>
-                  </li>
-                </ol>
+              <Card
+                title="Next actions"
+                icon={<CheckCircle2 />}
+                footer={
+                  <span className="text-xs text-muted">
+                    {items.length === 0
+                      ? "Derived from your document list and due-review list — nothing has been recorded yet, so nothing is suggested."
+                      : `Derived from the ${items.length} most recent document${items.length === 1 ? "" : "s"} plus your due-review list — no prediction, no recommendation beyond recorded state.`}
+                  </span>
+                }
+              >
+                {documents.initialLoading ? (
+                  <SkeletonRows rows={3} />
+                ) : actions.length === 0 ? (
+                  <div className="stack gap-3 text-sm">
+                    <p>
+                      <strong>Nothing is waiting on you.</strong> Every loaded document is in a
+                      settled state and no reviews are due.
+                    </p>
+                    <p className="text-secondary">
+                      New work appears here the moment the server records it — a failed run, a
+                      document ready for recognition, or a scheduled review.
+                    </p>
+                    <Link to="/learntrace">
+                      <Button variant="secondary" size="sm" icon={<BrainCircuit />}>
+                        Run a prerequisite diagnosis
+                      </Button>
+                    </Link>
+                  </div>
+                ) : (
+                  <ol className="stack gap-4">
+                    {actions.map((action, index) => (
+                      <li key={action.key} className="row gap-3" style={{ alignItems: "flex-start" }}>
+                        <span className="flow__num" style={{ marginBottom: 0, flex: "none" }}>
+                          {index + 1}
+                        </span>
+                        <div style={{ minWidth: 0, flexGrow: 1 }}>
+                          <div className="flow__title">{action.title}</div>
+                          <div className="flow__desc">{action.detail}</div>
+                        </div>
+                        <Link to={action.to ?? "/documents"} style={{ flex: "none" }}>
+                          <Button
+                            size="sm"
+                            variant={action.tone === "primary" ? "primary" : "secondary"}
+                          >
+                            {action.cta}
+                          </Button>
+                        </Link>
+                      </li>
+                    ))}
+                  </ol>
+                )}
               </Card>
             </div>
           </div>

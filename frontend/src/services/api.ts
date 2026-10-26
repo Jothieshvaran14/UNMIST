@@ -9,14 +9,21 @@
 
 import { request, uploadWithProgress, type UploadProgress } from "./http";
 import type {
+  Diagnosis,
   DocumentProcessingStatus,
   DocumentSegment,
   GraphVersion,
   HealthResponse,
   LearnerProfile,
   LoginRequest,
+  MasteryEntry,
   OcrRegion,
   Page,
+  PortfolioItem,
+  PortfolioItemCreate,
+  PortfolioSettings,
+  PortfolioSettingsUpdate,
+  PublicProfile,
   RegisterRequest,
   ReviewItem,
   SegmentReviewRequest,
@@ -122,6 +129,49 @@ export function getProcessingStatus(
   );
 }
 
+/**
+ * `POST /v1/documents/{id}/ocr` -> `DocumentProcessingStatus` (202).
+ *
+ * Server decides eligibility: `preprocessed` / `review_required` / `failed`
+ * may start recognition, an in-flight document returns its **existing** active
+ * job (so repeats never create a duplicate), and everything else — including
+ * `completed`, `deletion_pending` and other users' documents — is a 409/404.
+ *
+ * Recognition output stays provisional: the server labels it recognized
+ * content, never verified truth.
+ */
+export function requestOcr(
+  documentId: string,
+  signal?: AbortSignal,
+): Promise<DocumentProcessingStatus> {
+  return request<DocumentProcessingStatus>(
+    `${V1}/documents/${encodeURIComponent(documentId)}/ocr`,
+    { method: "POST", signal },
+  );
+}
+
+/**
+ * `DELETE /v1/documents/{id}` -> `DocumentProcessingStatus` (202).
+ *
+ * Asynchronous and one-way: the server moves the document to
+ * `deletion_pending` (no pipeline may start, a purge job cleans storage and
+ * derived rows, a tombstone remains for audit) and only later reports `deleted`.
+ * Repeating the call while a purge is in flight is idempotent; after the purge
+ * finishes every read — including this one — returns 404.
+ *
+ * A 202 therefore means "deletion scheduled", NOT "deleted": callers must keep
+ * polling until reads 404 before reporting success to a human.
+ */
+export function deleteDocument(
+  documentId: string,
+  signal?: AbortSignal,
+): Promise<DocumentProcessingStatus> {
+  return request<DocumentProcessingStatus>(
+    `${V1}/documents/${encodeURIComponent(documentId)}`,
+    { method: "DELETE", signal },
+  );
+}
+
 export function listRegions(
   documentId: string,
   params: { limit?: number; offset?: number } = {},
@@ -217,6 +267,29 @@ export function listDueReviews(signal?: AbortSignal): Promise<ReviewItem[]> {
   return request<ReviewItem[]>(`${V1}/learners/me/reviews/due`, { signal });
 }
 
+/** `GET /v1/learners/me/mastery` -> list[MasteryResponse] */
+export function listMastery(signal?: AbortSignal): Promise<MasteryEntry[]> {
+  return request<MasteryEntry[]>(`${V1}/learners/me/mastery`, { signal });
+}
+
+/**
+ * `POST /v1/learners/me/diagnoses` -> DiagnosisResponse.
+ *
+ * Runs the real prerequisite-gap diagnosis: competing hypotheses built from
+ * the recorded graph relationships and the learner's mastery evidence. The
+ * result is machine reasoning, never a verdict — the UI labels it as such.
+ */
+export function runDiagnosis(
+  payload: { concept_id: string; org_id?: string },
+  signal?: AbortSignal,
+): Promise<Diagnosis> {
+  return request<Diagnosis>(`${V1}/learners/me/diagnoses`, {
+    method: "POST",
+    body: payload,
+    signal,
+  });
+}
+
 /* -------------------------- profiles ----------------------------- */
 
 /**
@@ -228,4 +301,57 @@ export function listDueReviews(signal?: AbortSignal): Promise<ReviewItem[]> {
  */
 export function getMyProfile(signal?: AbortSignal): Promise<LearnerProfile> {
   return request<LearnerProfile>(`${V1}/me/profile`, { signal });
+}
+
+/* --------------------------- portfolio --------------------------- */
+
+/** `GET /v1/me/portfolio/settings` */
+export function getPortfolioSettings(signal?: AbortSignal): Promise<PortfolioSettings> {
+  return request<PortfolioSettings>(`${V1}/me/portfolio/settings`, { signal });
+}
+
+/**
+ * `PATCH /v1/me/portfolio/settings`.
+ *
+ * `is_public: true` is the explicit opt-in that makes the portfolio
+ * readable by anyone holding the public id — the UI confirms before
+ * sending it and never flips it silently.
+ */
+export function updatePortfolioSettings(
+  payload: PortfolioSettingsUpdate,
+  signal?: AbortSignal,
+): Promise<PortfolioSettings> {
+  return request<PortfolioSettings>(`${V1}/me/portfolio/settings`, {
+    method: "PATCH",
+    body: payload,
+    signal,
+  });
+}
+
+/** `GET /v1/me/portfolio/items` -> list[PortfolioItemResponse] */
+export function listPortfolioItems(signal?: AbortSignal): Promise<PortfolioItem[]> {
+  return request<PortfolioItem[]>(`${V1}/me/portfolio/items`, { signal });
+}
+
+/** `POST /v1/me/portfolio/items` -> PortfolioItemResponse (201) */
+export function createPortfolioItem(
+  payload: PortfolioItemCreate,
+  signal?: AbortSignal,
+): Promise<PortfolioItem> {
+  return request<PortfolioItem>(`${V1}/me/portfolio/items`, {
+    method: "POST",
+    body: payload,
+    signal,
+  });
+}
+
+/** `GET /v1/portfolios/{public_id}` — anonymous read of a published profile. */
+export function getPublicPortfolio(
+  publicId: string,
+  signal?: AbortSignal,
+): Promise<PublicProfile> {
+  return request<PublicProfile>(`${V1}/portfolios/${encodeURIComponent(publicId)}`, {
+    anonymous: true,
+    signal,
+  });
 }

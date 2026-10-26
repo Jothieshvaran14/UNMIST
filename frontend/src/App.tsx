@@ -7,10 +7,13 @@
  *   /documents/:documentId     Document detail + processing workspace
  *   /documents/:documentId/segments   Segment review workspace
  *   /knowledge                 Knowledge Map
+ *   /learntrace                Prerequisite-gap diagnosis
  *   /assessments               Assessments
  *   /retention                 Retention
+ *   /portfolio                 Portfolio (private, publish explicitly)
  *   /settings                  Settings
  *   /login                     Sign in / register
+ *   /p/:publicId               Public portfolio (anonymous, outside auth)
  *   *                          Not found
  *
  * Routes are browser-history based, so direct navigation and refresh work;
@@ -44,6 +47,15 @@ const SettingsPage = lazy(() =>
 );
 const SegmentWorkspacePage = lazy(() =>
   import("@/pages/SegmentWorkspacePage").then((m) => ({ default: m.SegmentWorkspacePage })),
+);
+const LearnTracePage = lazy(() =>
+  import("@/pages/LearnTracePage").then((m) => ({ default: m.LearnTracePage })),
+);
+const PortfolioPage = lazy(() =>
+  import("@/pages/PortfolioPage").then((m) => ({ default: m.PortfolioPage })),
+);
+const PublicPortfolioPage = lazy(() =>
+  import("@/pages/PublicPortfolioPage").then((m) => ({ default: m.PublicPortfolioPage })),
 );
 
 function FullPageLoading({ label }: { label: string }) {
@@ -84,6 +96,9 @@ function AppRoutes() {
     <Suspense fallback={<FullPageLoading label="Loading screen…" />}>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        {/* Published portfolio: readable without a session, so it sits
+            outside the auth guard and never touches the app shell. */}
+        <Route path="/p/:publicId" element={<PublicPortfolioPage />} />
 
         <Route
           element={
@@ -97,8 +112,10 @@ function AppRoutes() {
           <Route path="/documents/:documentId" element={<DocumentDetailPage />} />
           <Route path="/documents/:documentId/segments" element={<SegmentWorkspacePage />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
+          <Route path="/learntrace" element={<LearnTracePage />} />
           <Route path="/assessments" element={<AssessmentsPage />} />
           <Route path="/retention" element={<RetentionPage />} />
+          <Route path="/portfolio" element={<PortfolioPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>

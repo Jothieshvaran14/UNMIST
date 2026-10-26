@@ -1,72 +1,99 @@
 /* =====================================================================
    Unmist design tokens
-   One restrained theme: dark ink shell, light reading workspace,
-   electric indigo accent, slate secondary, semantic states.
+   Identity: graphite-and-paper. A warm near-black shell, a paper-toned
+   reading workspace, and a single viridian accent — calm, editorial,
+   instrument-like. No gradients in the brand, no glow.
+
+   One accent only. Everything else is neutral or semantic. The three
+   epistemic classes (evidence / inference / review) have their own
+   token families so the UI can distinguish observed fact from derived
+   reading from human confirmation without inventing new colors ad hoc.
    ===================================================================== */
 
 :root {
-  /* --- Brand / accent ------------------------------------------------ */
-  --accent-50: #eef2ff;
-  --accent-100: #e0e7ff;
-  --accent-200: #c7d2fe;
-  --accent-300: #a5b4fc;
-  --accent-400: #818cf8;
-  --accent-500: #6366f1;
-  --accent-600: #4f46e5;
-  --accent-700: #4338ca;
-  --accent-800: #3730a3;
+  /* --- Brand / accent: viridian ------------------------------------- */
+  --accent-50: #ecf7f4;
+  --accent-100: #d5eee7;
+  --accent-200: #a9dbcf;
+  --accent-300: #6cc3b3;
+  --accent-400: #2ba592;
+  --accent-500: #10897a;
+  --accent-600: #0a6e62;
+  --accent-700: #08584e;
+  --accent-800: #06453e;
   --accent: var(--accent-600);
   --accent-hover: var(--accent-700);
   --accent-soft: var(--accent-50);
 
-  /* --- Ink shell (navigation) --------------------------------------- */
-  --ink-950: #0b1020;
-  --ink-900: #111731;
-  --ink-850: #161d3a;
-  --ink-800: #1c2447;
-  --ink-700: #2a3358;
-  --ink-600: #3b4570;
+  /* --- Shell (navigation, auth panel): warm graphite ---------------- */
+  --ink-950: #131416;
+  --ink-900: #191a1d;
+  --ink-850: #1f2125;
+  --ink-800: #26282d;
+  --ink-700: #34373d;
+  --ink-600: #4a4e56;
   --shell-bg: var(--ink-950);
   --shell-surface: var(--ink-900);
   --shell-border: rgba(255, 255, 255, 0.08);
-  --shell-text: #e8ebf7;
-  --shell-text-muted: #98a1c4;
-  --shell-text-dim: #6e789e;
+  --shell-text: #eceae4;
+  --shell-text-muted: #a3a29a;
+  --shell-text-dim: #75746d;
 
-  /* --- Surfaces (light workspace) ----------------------------------- */
-  --bg: #f6f7fb;
+  /* --- Surfaces: warm paper workspace ------------------------------- */
+  --bg: #faf9f5;
   --surface: #ffffff;
   --surface-raised: #ffffff;
-  --surface-sunken: #f0f2f8;
-  --surface-hover: #f7f8fc;
+  --surface-sunken: #f2f1ea;
+  --surface-hover: #f7f6f1;
   --surface-inverse: var(--ink-900);
 
-  /* --- Text ---------------------------------------------------------- */
-  --text: #131a2e;
-  --text-secondary: #4b5675;
-  --text-muted: #707a9b;
+  /* --- Text: warm near-black ---------------------------------------- */
+  --text: #191a16;
+  --text-secondary: #4e5049;
+  --text-muted: #7b7d74;
   --text-inverse: #ffffff;
 
   /* --- Borders ------------------------------------------------------- */
-  --border: #e4e7f1;
-  --border-strong: #d3d8e8;
+  --border: #e6e4da;
+  --border-strong: #d4d2c6;
   --border-focus: var(--accent-500);
 
   /* --- Semantic states ---------------------------------------------- */
-  --success: #16855a;
-  --success-soft: #e6f6ef;
-  --success-border: #b3e3d0;
-  --warning: #b06a08;
-  --warning-soft: #fdf3e3;
-  --warning-border: #f5ddb4;
-  --danger: #c62f3f;
-  --danger-soft: #fdedee;
-  --danger-border: #f6c9ce;
-  --info: #1f6fb2;
-  --info-soft: #e8f2fb;
-  --info-border: #c2ddf3;
-  --neutral-soft: #eef0f6;
-  --neutral-border: #dde1ed;
+  --success: #2f7d4a;
+  --success-soft: #e9f4ed;
+  --success-border: #bfdfcb;
+  --warning: #a2680b;
+  --warning-soft: #faf1de;
+  --warning-border: #ebd8ac;
+  --danger: #bc3341;
+  --danger-soft: #fbeaec;
+  --danger-border: #f1c6cb;
+  --info: #2a6299;
+  --info-soft: #e9f1f9;
+  --info-border: #c6daec;
+  --neutral-soft: #eeece4;
+  --neutral-border: #dedbcf;
+
+  /* --- Epistemic classes --------------------------------------------
+     The product's core distinction: what was observed, what was
+     inferred, and what a human confirmed. Used by the .prov chips and
+     by any panel that labels its own epistemic status.               */
+  /* Observed source evidence (transcribed content, region references). */
+  --evidence: #08584e;
+  --evidence-soft: var(--accent-50);
+  --evidence-border: #a9dbcf;
+  /* Algorithmic inference (segmentation, derived structure) — dashed. */
+  --inference: #8a5a06;
+  --inference-soft: #fbf3e2;
+  --inference-border: #e8d5a6;
+  /* Machine suggestion awaiting human judgement. */
+  --suggestion: #2a6299;
+  --suggestion-soft: var(--info-soft);
+  --suggestion-border: var(--info-border);
+  /* Human-reviewed outcome. */
+  --reviewed: var(--success);
+  --reviewed-soft: var(--success-soft);
+  --reviewed-border: var(--success-border);
 
   /* --- Spacing scale (4px base) -------------------------------------- */
   --space-1: 4px;
@@ -80,25 +107,29 @@
   --space-9: 56px;
   --space-10: 72px;
 
-  /* --- Radii --------------------------------------------------------- */
-  --radius-xs: 4px;
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+  /* --- Radii: tight and precise -------------------------------------- */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 11px;
+  --radius-xl: 14px;
   --radius-pill: 999px;
 
-  /* --- Shadows ------------------------------------------------------- */
-  --shadow-xs: 0 1px 2px rgba(17, 23, 49, 0.06);
-  --shadow-sm: 0 1px 3px rgba(17, 23, 49, 0.08), 0 1px 2px rgba(17, 23, 49, 0.04);
-  --shadow-md: 0 4px 12px rgba(17, 23, 49, 0.08), 0 2px 4px rgba(17, 23, 49, 0.04);
-  --shadow-lg: 0 12px 32px rgba(17, 23, 49, 0.12), 0 4px 8px rgba(17, 23, 49, 0.05);
-  --shadow-focus: 0 0 0 3px rgba(99, 102, 241, 0.35);
+  /* --- Elevation: neutral, quiet ------------------------------------- */
+  --shadow-xs: 0 1px 2px rgba(23, 24, 21, 0.06);
+  --shadow-sm: 0 1px 3px rgba(23, 24, 21, 0.08), 0 1px 2px rgba(23, 24, 21, 0.04);
+  --shadow-md: 0 4px 12px rgba(23, 24, 21, 0.08), 0 2px 4px rgba(23, 24, 21, 0.04);
+  --shadow-lg: 0 12px 32px rgba(23, 24, 21, 0.13), 0 4px 8px rgba(23, 24, 21, 0.05);
+  --shadow-focus: 0 0 0 3px rgba(16, 137, 122, 0.35);
 
   /* --- Typography ---------------------------------------------------- */
   --font-sans:
-    "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+    "Inter", "Segoe UI Variable Text", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Document-reading voice: OCR transcripts, segment text, portfolio prose. */
+  --font-reading:
+    "Charter", "Bitstream Charter", "Iowan Old Style", Georgia, ui-serif,
+    "Times New Roman", serif;
   --font-mono:
     ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
 
@@ -120,7 +151,7 @@
   --weight-semibold: 600;
   --weight-bold: 700;
 
-  /* --- Motion -------------------------------------------------------- */
+  /* --- Motion: feedback, never decoration ---------------------------- */
   --dur-fast: 120ms;
   --dur-base: 180ms;
   --dur-slow: 260ms;
@@ -128,8 +159,9 @@
 
   /* --- Layout -------------------------------------------------------- */
   --sidebar-w: 244px;
-  --topbar-h: 60px;
-  --content-max: 1240px;
+  --topbar-h: 56px;
+  --content-max: 1180px;
+  --prose-max: 68ch;
   --z-drawer: 60;
   --z-modal: 80;
   --z-toast: 100;

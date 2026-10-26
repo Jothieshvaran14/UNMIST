@@ -214,6 +214,11 @@ export function SegmentWorkspacePage() {
 
   const uncertainty = selected ? uncertaintyInfo(selected.uncertainty) : null;
   const review = selected ? reviewInfo(selected.review_status) : null;
+  // Provenance of the shown text: machine-inferred until a human confirms it.
+  const textProv =
+    selected && selected.review_status !== "pending"
+      ? { cls: "prov prov--reviewed", label: "human reviewed" }
+      : { cls: "prov prov--inference", label: "inferred structure" };
 
   return (
     <>
@@ -281,6 +286,11 @@ export function SegmentWorkspacePage() {
                       <Badge tone={segReview.tone}>{segReview.label}</Badge>
                       {segUncertainty && <Badge tone={segUncertainty.tone}>{segUncertainty.label}</Badge>}
                       {segment.corrected_text && <Badge tone="accent">Corrected</Badge>}
+                      <span
+                        className={`prov ${segment.review_status === "pending" ? "prov--inference" : "prov--reviewed"}`}
+                      >
+                        {segment.review_status === "pending" ? "inferred structure" : "human reviewed"}
+                      </span>
                     </span>
                     <span className="seg-item__text">
                       {segment.effective_text || segment.text || "(no text)"}
@@ -365,6 +375,7 @@ export function SegmentWorkspacePage() {
                       <div className="field__label row gap-2">
                         <PencilLine style={{ width: 14, height: 14 }} aria-hidden="true" />
                         Reviewed text (replaces the derived text)
+                        <span className="prov prov--reviewed">human reviewed</span>
                       </div>
                       <div className="seg-detail__text seg-detail__corrected">
                         {selected.effective_text}
@@ -383,7 +394,10 @@ export function SegmentWorkspacePage() {
                     </div>
                   ) : (
                     <div className="stack gap-2">
-                      <div className="field__label">Segment text (derived from regions)</div>
+                      <div className="field__label row gap-2 wrap">
+                        Segment text (derived from regions)
+                        <span className={textProv.cls}>{textProv.label}</span>
+                      </div>
                       <div className="seg-detail__text">
                         {selected.effective_text || selected.text || "(no text)"}
                       </div>
@@ -428,9 +442,10 @@ export function SegmentWorkspacePage() {
                   )}
 
                   <div className="stack gap-2">
-                    <div className="field__label row gap-2">
+                    <div className="field__label row gap-2 wrap">
                       <Eye style={{ width: 14, height: 14 }} aria-hidden="true" />
                       Source regions ({selected.region_refs.length})
+                      <span className="prov prov--evidence">observed page region</span>
                     </div>
                     {selected.region_refs.length === 0 ? (
                       <p className="text-xs text-muted">
@@ -448,6 +463,15 @@ export function SegmentWorkspacePage() {
                               <span className="region-ref__geom">
                                 x {ref.bbox_left}, y {ref.bbox_top}, w {ref.bbox_width}, h{" "}
                                 {ref.bbox_height} · {ref.review_status}
+                              </span>
+                              <span style={{ display: "block", marginTop: 5 }}>
+                                <span
+                                  className={`prov ${ref.review_status === "pending" ? "prov--suggestion" : "prov--reviewed"}`}
+                                >
+                                  {ref.review_status === "pending"
+                                    ? "machine suggestion · unverified"
+                                    : "human reviewed"}
+                                </span>
                               </span>
                             </span>
                           </li>

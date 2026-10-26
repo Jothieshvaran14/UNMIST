@@ -248,6 +248,45 @@ export interface Mastery {
   [key: string]: unknown;
 }
 
+/**
+ * `GET /v1/learners/me/mastery` (MasteryResponse).
+ *
+ * `mastery_probability` is a *provisional model estimate*, never an
+ * established fact — the UI must label it with `model_version` and
+ * `evidence_count` wherever it is shown.
+ */
+export interface MasteryEntry {
+  concept_id: string;
+  mastery_probability: number;
+  evidence_count: number;
+  state: string;
+  model_version: string;
+  last_activity_at: string | null;
+}
+
+/** One prerequisite hypothesis from `build_hypotheses` (machine-generated). */
+export interface DiagnosisHypothesis {
+  concept_id: string;
+  stable_key: string;
+  canonical_name: string;
+  mastery_probability: number;
+  evidence_count: number;
+  likely_gap: boolean;
+  information_gain: number;
+}
+
+/** `POST /v1/learners/me/diagnoses` (DiagnosisResponse). */
+export interface Diagnosis {
+  id: string;
+  concept_id: string;
+  status: string;
+  hypotheses: DiagnosisHypothesis[];
+  selected_question_id: string | null;
+  conclusion: string | null;
+  evidence_summary: string | null;
+  created_at: string;
+}
+
 export interface ReviewItem {
   id?: string;
   schedule_id?: string;
@@ -316,4 +355,68 @@ export interface LearnerProfile {
   assessment_history: ProfileAttemptEntry[];
   diagnoses: ProfileDiagnosisEntry[];
   topics: Array<{ topic_id: string; name: string; slug: string }>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Portfolio (`backend/app/schemas/profile.py`)                        */
+/* ------------------------------------------------------------------ */
+
+/** `GET|PATCH /v1/me/portfolio/settings` — publishing is explicit opt-in. */
+export interface PortfolioSettings {
+  public_id: string;
+  is_public: boolean;
+  headline: string | null;
+  bio: string | null;
+  show_assessed_only: boolean;
+  published_at: string | null;
+}
+
+export interface PortfolioSettingsUpdate {
+  is_public?: boolean;
+  headline?: string;
+  bio?: string;
+  show_assessed_only?: boolean;
+}
+
+/** `GET|POST /v1/me/portfolio/items` */
+export interface PortfolioItem {
+  id: string;
+  item_type: string;
+  title: string;
+  evidence_summary: string | null;
+  is_self_reported: boolean;
+  visibility: string;
+  score: number | null;
+  max_score: number | null;
+}
+
+export interface PortfolioItemCreate {
+  item_type: "concept" | "skill" | "project" | "assessment" | "certificate";
+  title: string;
+  concept_id?: string;
+  evidence_summary?: string;
+  is_self_reported?: boolean;
+  visibility?: "private" | "public";
+  score?: number;
+  max_score?: number;
+}
+
+/** One item as exposed publicly (never carries private source content). */
+export interface PublicPortfolioItem {
+  item_type: string;
+  title: string;
+  evidence_summary: string | null;
+  is_self_reported: boolean;
+  verification_note: string;
+  score: number | null;
+  max_score: number | null;
+}
+
+/** `GET /v1/portfolios/{public_id}` — authorized public read only. */
+export interface PublicProfile {
+  public_id: string;
+  headline: string | null;
+  bio: string | null;
+  items: PublicPortfolioItem[];
+  limitations: string;
 }
