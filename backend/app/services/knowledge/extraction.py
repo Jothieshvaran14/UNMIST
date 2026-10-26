@@ -49,7 +49,21 @@ def extract_text(content: bytes, media_type: str, charset: str = "utf-8") -> str
 
 
 def _extract_html(content: bytes, charset: str) -> str:
-    soup = BeautifulSoup(content, "lxml", from_encoding=charset)
+    # The charset handed in comes from the upstream response (an authoritative
+    # Content-Type header), so it is honoured explicitly by decoding here.
+    # Relying on BeautifulSoup's ``from_encoding=`` alone made the result
+    # depend on whether the optional ``chardet`` library happened to be
+    # installed: without it, bs4 fell back to UTF-8 with replacement and
+    # mangled non-ASCII text (that is what CI caught). Unknown or mismatched
+    # declarations fall back to bs4's own sniffing, which also honours a
+    # <meta charset> inside the document.
+    markup: str | bytes = content
+    if charset:
+        try:
+            markup = content.decode(charset)
+        except (LookupError, UnicodeDecodeError):
+            markup = content
+    soup = BeautifulSoup(markup, "lxml")
     for element in soup(["script", "style", "noscript", "template"]):
         element.decompose()
     text = soup.get_text(separator="\n")
