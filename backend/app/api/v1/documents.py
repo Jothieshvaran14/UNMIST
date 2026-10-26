@@ -154,6 +154,10 @@ def list_documents(
     scope = [
         SourceDocument.owner_user_id == actor.id,
         SourceDocument.org_id == tenant,
+        # Purged documents are tombstones: keep them out of the library.
+        # coalesce() so fetched documents (NULL processing_state) still list.
+        func.coalesce(SourceDocument.processing_state, "")
+        != S.deleted.value,
     ]
     query = select(SourceDocument).where(*scope)
     total = int(
@@ -185,42 +189,39 @@ def get_document(
     actor: User = Depends(get_current_user),
     session: Session = Depends(get_db),
 ):
-    document = session.get(SourceDocument, document_id)
-    # A document with no owner is not an uploaded document and is not
-    # addressable through this route; return 404 rather than leak existence.
-    if document is None or document.owner_user_id is None:
-        raise NotFoundError("Document not found")
-    # IDOR defence: the owner must match the caller.
-    if document.owner_user_id != actor.id:
-        raise NotFoundError("Document not found")
-    return document
+    # Owner-scoped (IDOR-safe) and tombstone-aware: a purged document is no
+    # longer readable, so this shares the same fetch helper as every other
+    # document route.
+    return _owned_document(session, document_id, actor)
 
 
 def _owned_document(
     session: Session, document_id: str, actor: User
 ) -> SourceDocument:
-    """Fetch a document enforcing owner scope (IDOR-safe), or 404."""
+    """Fetch a document enforcing owner scope (IDOR-safe), or 404.
+
+    A document whose purge has finished (``deleted``) is no longer readable:
+    the tombstone exists only so the one-way lifecycle stays auditable.
+    """
     document = session.get(SourceDocument, document_id)
     if document is None or document.owner_user_id is None:
         raise NotFoundError("Document not found")
     if document.owner_user_id != actor.id:
         raise NotFoundError("Document not found")
+    if document.processing_state == S.deleted.value:
+        raise NotFoundError("Document not found")
     return document
 
 
-@router.get("/{document_id}/processing", response_model=DocumentProcessingStatus)
-def get_processing_status(
-    document_id: str,
-    actor: User = Depends(get_current_user),
-    session: Session = Depends(get_db),
-):
-    """Return safe processing progress for an owned document.
+def _processing_status(
+    session: Session, document: SourceDocument
+) -> DocumentProcessingStatus:
+    """Build the safe processing-status view for an owned document.
 
     Exposes only lifecycle facts (state, pages processed, retry availability,
     whether preprocessing artifacts are ready). Never leaks storage keys, paths,
     or internal error text beyond the bounded category/detail.
     """
-    document = _owned_document(session, document_id, actor)
     state = (
         S(document.processing_state) if document.processing_state else None
     )
@@ -247,6 +248,102 @@ def get_processing_status(
         error_detail=document.error_detail,
         last_job_id=document.last_job_id,
     )
+
+
+@router.get("/{document_id}/processing", response_model=DocumentProcessingStatus)
+def get_processing_status(
+    document_id: str,
+    actor: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+):
+    """Return safe processing progress for an owned document.
+
+    Exposes only lifecycle facts (state, pages processed, retry availability,
+    whether preprocessing artifacts are ready). Never leaks storage keys, paths,
+    or internal error text beyond the bounded category/detail.
+    """
+    document = _owned_document(session, document_id, actor)
+    return _processing_status(session, document)
+
+
+@router.post(
+    "/{document_id}/ocr",
+    response_model=DocumentProcessingStatus,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def request_ocr(
+    document_id: str,
+    actor: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+):
+    """Request handwriting recognition for an owned, preprocessed document.
+
+    Authorization: owner-scoped and server-side (IDOR-safe). Eligibility is
+    decided inside ``enqueue_ocr`` so an unrecognizable document gets a clean
+    409 ("not ready for OCR" / "no preprocessed pages") instead of a job that
+    can only fail.
+
+    Recognition is asynchronous: this returns ``202`` with the document now in
+    ``ocr_processing``. Each request takes a fresh run number, so re-running
+    after a failure schedules genuinely new work rather than answering with a
+    previously succeeded job. Repeating the call while a run is in flight is
+    idempotent (the active job is returned).
+
+    OCR output is recognized content, never verified truth.
+    """
+    document = _owned_document(session, document_id, actor)
+    job = ingestion.enqueue_ocr(session, document, org_id=document.org_id)
+    record_audit(
+        session,
+        action="document.ocr_requested",
+        actor_id=actor.id,
+        org_id=document.org_id,
+        resource_type="source_document",
+        resource_id=document.id,
+        details={"job_id": str(job.id), "run": int(job.payload.get("run") or 0)},
+    )
+    session.commit()
+    return _processing_status(session, document)
+
+
+@router.delete(
+    "/{document_id}",
+    response_model=DocumentProcessingStatus,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def delete_document(
+    document_id: str,
+    actor: User = Depends(get_current_user),
+    session: Session = Depends(get_db),
+):
+    """Begin deleting an owned document (one-way, asynchronous).
+
+    Authorization: owner-scoped and server-side (IDOR-safe).
+
+    This moves the document to ``deletion_pending`` — a state every pipeline
+    treats as a skip, so no further preprocessing, OCR or segmentation starts,
+    and a worker already mid-run stops rather than writing a terminal state
+    over the top. A background job then purges this document's private storage
+    artifacts and derived rows; only once that cleanup finishes does the
+    document become ``deleted``. A failed purge is retried rather than reported
+    as done.
+
+    Calling this again while a purge is in flight returns the existing job, so
+    the endpoint is idempotent. Once ``deleted``, further reads return 404.
+    """
+    document = _owned_document(session, document_id, actor)
+    job = ingestion.enqueue_deletion(session, document, org_id=document.org_id)
+    record_audit(
+        session,
+        action="document.delete_requested",
+        actor_id=actor.id,
+        org_id=document.org_id,
+        resource_type="source_document",
+        resource_id=document.id,
+        details={"job_id": str(job.id), "run": int(job.payload.get("run") or 0)},
+    )
+    session.commit()
+    return _processing_status(session, document)
 
 
 @router.get(

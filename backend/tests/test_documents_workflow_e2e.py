@@ -23,12 +23,10 @@ What is exercised, in order
 
 Honest boundaries (see the notes at each assertion)
 ---------------------------------------------------
-* **OCR has no API trigger.** ``ingestion.enqueue_ocr`` is defined and correct,
-  but nothing in the application exposes it — no route, no job chain, no
-  script. This test therefore calls that service function directly, exactly as
-  the Checkpoint D tests do. The upload -> preprocess -> OCR transition is
-  therefore verified at the *service* boundary, not over HTTP. This is recorded
-  as a P1 gap in the Checkpoint F report, not silently worked around.
+* **OCR runs over the real HTTP trigger.** ``POST /api/v1/documents/{id}/ocr``
+  schedules the work (202, audited, eligibility-checked); the registered
+  ``document.ocr`` handler executes it. The upload -> preprocess -> OCR hop is
+  therefore verified end to end over HTTP, not at the service boundary.
 * **The OCR text is fixture-derived, not recognized.** The real ``fake``
   provider runs the real line extractor and the real coordinate mapping, so
   geometry and persistence are genuinely exercised; only the string content is
@@ -60,7 +58,6 @@ from app.models.documents import (
 from app.models.job import Job, JobStatus
 from app.models.knowledge import SourceDocument
 from app.services import jobs as job_service
-from app.services.documents import ingestion
 from app.services.documents.ocr import registry
 from app.services.documents.ocr.fake import FAKE_MODEL_ID, FakeOcrProvider
 from app.services.storage import get_object_store, reset_object_store_for_tests
@@ -240,10 +237,12 @@ def test_full_workflow_upload_to_reviewed_segment(
         assert doc.segmentation_status == SegmentationStatus.not_run.value
 
         # --- 3. OCR ------------------------------------------------------
-        # Documented boundary: no API route triggers OCR, so the (correct,
-        # tested) service function is called directly.
-        ingestion.enqueue_ocr(db_session, doc, org_id=doc.org_id)
-        db_session.commit()
+        # The real HTTP trigger: owner-scoped, eligibility-checked, audited.
+        requested = client.post(
+            f"/api/v1/documents/{doc_id}/ocr", headers=auth_headers
+        )
+        assert requested.status_code == 202, requested.text
+        assert requested.json()["processing_state"] == S.ocr_processing.value
 
         ran = _run_queue(session_factory)
         assert [j.job_type for j in ran] == ["document.ocr"]
@@ -398,8 +397,8 @@ def test_end_to_end_tenant_isolation(
         doc_id = up.json()["id"]
         _run_queue(session_factory)
         db_session.expire_all()
-        ingestion.enqueue_ocr(db_session, db_session.get(SourceDocument, doc_id))
-        db_session.commit()
+        requested = client.post(f"/api/v1/documents/{doc_id}/ocr", headers=auth_headers)
+        assert requested.status_code == 202, requested.text
         _run_queue(session_factory)
         db_session.expire_all()
         assert (

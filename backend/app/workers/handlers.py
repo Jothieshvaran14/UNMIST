@@ -10,6 +10,7 @@ from ..services import jobs
 from ..services.documents.ingestion import (
     DOCUMENT_OCR_JOB,
     DOCUMENT_PROCESS_JOB,
+    DOCUMENT_PURGE_JOB,
     DOCUMENT_SEGMENT_JOB,
 )
 from ..services.knowledge import concept_extraction, graph_service
@@ -76,3 +77,19 @@ def handle_document_segment(session, job) -> None:
     )
 
     DocumentSegmentationPipeline(session, job).run()
+
+
+@jobs.register_handler(DOCUMENT_PURGE_JOB)
+def handle_document_purge(session, job) -> None:
+    """Destroy a deleted document's private artifacts and derived rows.
+
+    Runs only for documents already moved to ``deletion_pending`` by
+    ``enqueue_deletion``. Storage objects are removed before their rows so a
+    retry still finds the keys, every step is idempotent, and the ``deleted``
+    tombstone is written only while this worker still holds the lease — a
+    stale worker stops rather than overwriting the new owner's work. Shared
+    sources, topics, and other tenants' records are never touched.
+    """
+    from ..services.documents.purge import DocumentPurgePipeline
+
+    DocumentPurgePipeline(session, job).run()
